@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import DashboardPanel from '@/components/DashboardPanel';
-import { SimulationData, AgentLogEntry } from '@/types/simulation';
+import DashboardPanel, { ActiveTab } from '@/components/DashboardPanel';
+import type { CameraPreset } from '@/components/ThreeViewer';
+import { SimulationData, AgentLogEntry, SupportedLang } from '@/types/simulation';
 
 // Strictly isolate Three.js WebGL Canvas from SSR to prevent Next.js hydration mismatches
 const ThreeViewer = dynamic(() => import('@/components/ThreeViewer'), {
@@ -158,6 +159,13 @@ const INITIAL_SIMULATION_DATA: SimulationData = {
     '긴급 대피 방송입니다. 서쪽 1번 출구 계단으로 폭우가 유입되어 위험합니다. 일반 승객은 녹색 유도선을 따라 동쪽 4번 출구로, 휠체어 및 노약자께서는 황색 유도선을 따라 동쪽 방수 엘리베이터 3호기로 이동해 주십시오.',
 };
 
+const BCP47_MAP: Record<SupportedLang, string> = {
+  ko: 'ko-KR',
+  en: 'en-US',
+  ja: 'ja-JP',
+  zh: 'zh-CN',
+};
+
 function formatNow(): string {
   const d = new Date();
   return d.toTimeString().split(' ')[0];
@@ -166,6 +174,31 @@ function formatNow(): string {
 export default function SafeCityPage() {
   const [simulationData, setSimulationData] = useState<SimulationData>(INITIAL_SIMULATION_DATA);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Master Controlled UI States (for both user interaction & Auto-Demo Director)
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
+  const [thermalOptic, setThermalOptic] = useState<boolean>(false);
+  const [isAutoDemo, setIsAutoDemo] = useState<boolean>(false);
+  const [demoBanner, setDemoBanner] = useState<{
+    step: string;
+    title: string;
+    progressPercent: number;
+  } | null>(null);
+
+  const [activeTab, setActiveTab] = useState<ActiveTab>('CONTROL');
+  const [selectedLang, setSelectedLang] = useState<SupportedLang>('ko');
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({
+    0: true,
+    1: true,
+  });
+  const [selectedShelterId, setSelectedShelterId] = useState<string>('shelter-yeouido-park');
+  const [gpsStatusMsg, setGpsStatusMsg] = useState<string>(
+    'GPS: 서울 영등포구 여의도역 (37.5216°N, 126.9242°E)'
+  );
+
+  const demoTimersRef = useRef<number[]>([]);
+
   const [agentLogs, setAgentLogs] = useState<AgentLogEntry[]>([
     {
       id: 'init-1',
@@ -198,6 +231,332 @@ export default function SafeCityPage() {
       },
     ]);
   }, []);
+
+  // Speak text in the requested language via Web Speech API
+  const speakTextOutLoud = useCallback(
+    (text: string, lang: SupportedLang, rate = 1.12) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = BCP47_MAP[lang];
+        utterance.rate = rate;
+        utterance.pitch = 1.0;
+
+        const voices = window.speechSynthesis.getVoices();
+        const targetPrefix = BCP47_MAP[lang].split('-')[0].toLowerCase();
+        const matchedVoice = voices.find((v) =>
+          v.lang.toLowerCase().startsWith(targetPrefix)
+        );
+        if (matchedVoice) {
+          utterance.voice = matchedVoice;
+        }
+
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+
+        setIsSpeaking(true);
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        setIsSpeaking(false);
+      }
+    },
+    []
+  );
+
+  // Toggle Voice Broadcast (Manual or Language Button Click)
+  const handleToggleSpeak = useCallback(
+    (langOverride?: SupportedLang) => {
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      const targetLang = langOverride ?? selectedLang;
+
+      if (isSpeaking && !langOverride) {
+        window.speechSynthesis.cancel();
+        setIsSpeaking(false);
+        return;
+      }
+
+      const textToSpeak =
+        simulationData.translations?.[targetLang] ??
+        simulationData.voiceBroadcast ??
+        simulationData.aiReport.vulnerableNotice;
+
+      speakTextOutLoud(textToSpeak, targetLang, 1.08);
+      appendLog(
+        'VERIFIED',
+        `다국어 음성 방송 송출 (${targetLang.toUpperCase()}): "${textToSpeak.slice(0, 28)}..."`
+      );
+    },
+    [isSpeaking, selectedLang, simulationData, speakTextOutLoud, appendLog]
+  );
+
+  // Select Language Button -> if already speaking (or in Broadcast tab), immediately speak in that language!
+  const handleSelectLang = useCallback(
+    (lang: SupportedLang) => {
+      setSelectedLang(lang);
+      const textToSpeak =
+        simulationData.translations?.[lang] ??
+        simulationData.voiceBroadcast ??
+        simulationData.aiReport.vulnerableNotice;
+      speakTextOutLoud(textToSpeak, lang, 1.1);
+    },
+    [simulationData, speakTextOutLoud]
+  );
+
+  const handleToggleCheckItem = useCallback((idx: number) => {
+    setCheckedItems((prev) => ({
+      ...prev,
+      [idx]: !prev[idx],
+    }));
+  }, []);
+
+  const handleTriggerGpsSync = useCallback(() => {
+    setGpsStatusMsg('GPS 위성 신호 및 Google Maps 지오펜싱 수신 중...');
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setGpsStatusMsg(
+            `실시간 GPS 동기화 완료 (${pos.coords.latitude.toFixed(4)}°N, ${pos.coords.longitude.toFixed(4)}°E) · 여의도 권역 매핑됨`
+          );
+        },
+        () => {
+          setGpsStatusMsg(
+            '여의도역 B2 비상 중계기 GPS 고정 완료 (37.5216°N, 126.9242°E)'
+          );
+        },
+        { timeout: 2500 }
+      );
+    } else {
+      setTimeout(() => {
+        setGpsStatusMsg(
+          '여의도역 B2 비상 중계기 GPS 고정 완료 (37.5216°N, 126.9242°E)'
+        );
+      }, 600);
+    }
+  }, []);
+
+  const clearDemoTimers = useCallback(() => {
+    demoTimersRef.current.forEach((id) => window.clearTimeout(id));
+    demoTimersRef.current = [];
+  }, []);
+
+  const stopAutoDemo = useCallback(() => {
+    clearDemoTimers();
+    setIsAutoDemo(false);
+    setDemoBanner(null);
+    setThermalOptic(false);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+  }, [clearDemoTimers]);
+
+  // Master Auto-Demo Sequencer (Full 32-second Hands-Free Choreographed Tour)
+  const startAutoDemo = useCallback(() => {
+    clearDemoTimers();
+    setIsAutoDemo(true);
+
+    const schedule = (ms: number, fn: () => void) => {
+      const id = window.setTimeout(fn, ms);
+      demoTimersRef.current.push(id);
+    };
+
+    // STEP 1 (0.0s): Start at exact interior concourse view, raise water level dynamically
+    setCameraPreset('OVERVIEW');
+    setThermalOptic(false);
+    setActiveTab('CONTROL');
+    setCheckedItems({ 0: true, 1: false, 2: false, 3: false });
+    setSimulationData({
+      ...INITIAL_SIMULATION_DATA,
+      status: 'WARNING',
+      waterLevel: 1.4,
+      scenario: '서쪽 1번 출구 집중호우 유입 감지 · Gemini 4 Argon 실시간 수위 분석 중',
+    });
+    setDemoBanner({
+      step: 'STEP 1/6 · B2 중앙 홀 관제',
+      title: '서쪽 1번 출구 폭우 유입 감지 및 실시간 수위 상승 (1.4m → 2.4m)',
+      progressPercent: 16,
+    });
+    appendLog('SENSOR_SYNC', '[AUTO-DEMO] 여의도역 B2 중앙 홀 광각 관제 및 수위 센서 가동');
+
+    schedule(1400, () => {
+      setSimulationData((prev) => ({
+        ...prev,
+        status: 'DANGER',
+        waterLevel: 2.0,
+        scenario: '서쪽 1번 출구 급류 유입(2.0m) · 차수판 자동 기립 및 우회 대피로 산출',
+      }));
+    });
+
+    schedule(2700, () => {
+      setSimulationData(INITIAL_SIMULATION_DATA);
+      appendLog(
+        'ARGON_CORE',
+        '[AUTO-DEMO] 수위 2.4m 위험 도달 -> 동쪽 4번 출구(녹색) & 방수 EL#3(황색) 경로 생성'
+      );
+    });
+
+    // STEP 2 (4.5s): Switch to Autonomous Drone 1st-Person FPV + Thermal FLIR ON
+    schedule(4500, () => {
+      setCameraPreset('DRONE_CAM');
+      setDemoBanner({
+        step: 'STEP 2/6 · 자율 드론 1인칭(FPV) 수색',
+        title: '드론 노즈 짐벌 시점 전환 및 FLIR 열화상 스캔 자동 활성화',
+        progressPercent: 33,
+      });
+      appendLog('ARGON_CORE', '[AUTO-DEMO] 자율 수색 드론 A1 1인칭(FPV) 시점 전환 완료');
+    });
+
+    schedule(6000, () => {
+      setThermalOptic(true);
+      appendLog('SENSOR_SYNC', '[AUTO-DEMO] 드론 FLIR 열화상 광학 센서 ON (수온 14.8°C · 고립자 스캔)');
+    });
+
+    schedule(8500, () => {
+      setThermalOptic(false);
+    });
+
+    // STEP 3 (9.2s): Switch to Waterproof Elevator #3 + Broadcast & Checklist Tab + Multilingual Voice!
+    schedule(9200, () => {
+      setCameraPreset('ELEVATOR_CAM');
+      setActiveTab('BROADCAST_CHECK');
+      setSelectedLang('ko');
+      setCheckedItems({ 0: true, 1: true, 2: false, 3: false });
+      setDemoBanner({
+        step: 'STEP 3/6 · 교통약자 방수 엘리베이터 & 다국어 방송',
+        title: '🇰🇷 한국어 → 🇺🇸 영어 → 🇯🇵 일본어 음성 안내 송출 및 체크리스트 자동 점검',
+        progressPercent: 52,
+      });
+      appendLog('VERIFIER', '[AUTO-DEMO] 방수 엘리베이터 #3 클로즈업 및 한국어 비상 방송 송출');
+      speakTextOutLoud(
+        '긴급 대피 방송입니다. 서쪽 1번 출구 침수로 일반 승객은 동쪽 4번 출구로, 휠체어 이용자는 방수 엘리베이터 3호기로 이동해 주십시오.',
+        'ko',
+        1.22
+      );
+    });
+
+    // 14.2s: Auto-switch to English (🇺🇸 EN) & speak English broadcast out loud + check item #3
+    schedule(14200, () => {
+      setSelectedLang('en');
+      setCheckedItems({ 0: true, 1: true, 2: true, 3: false });
+      appendLog('VERIFIED', '[AUTO-DEMO] 🇺🇸 영어(EN) 다국어 음성 안내 자동 전환 및 체크리스트 3/4 완료');
+      speakTextOutLoud(
+        'Code Red Flood Alert. West Exit 1 is flooded. Follow the green path to East Exit 4, or yellow path to Waterproof Elevator 3.',
+        'en',
+        1.18
+      );
+    });
+
+    // 19.0s: Auto-switch to Japanese (🇯🇵 日本語) & check item #4 (100% Complete!)
+    schedule(19000, () => {
+      setSelectedLang('ja');
+      setCheckedItems({ 0: true, 1: true, 2: true, 3: true });
+      appendLog('VERIFIED', '[AUTO-DEMO] 🇯🇵 일본어(JA) 전환 및 현장 대응 체크리스트 4/4 (100%) 점검 완료!');
+      speakTextOutLoud(
+        '緊急洪水警報。東側4番出口、または防水エレベーター3号機へ避難してください。',
+        'ja',
+        1.25
+      );
+    });
+
+    // 21.5s: Highlight Chinese (🇨🇳 中文) transcript
+    schedule(21500, () => {
+      setSelectedLang('zh');
+    });
+
+    // STEP 4 (22.6s): Switch to West Exit 1 Floodgate Cam + GPS Shelters Tab + Radar Pin Cycling
+    schedule(22600, () => {
+      setCameraPreset('HAZARD_CAM');
+      setActiveTab('GPS_SHELTERS');
+      handleTriggerGpsSync();
+      setSelectedShelterId('shelter-yeouido-park');
+      setDemoBanner({
+        step: 'STEP 4/6 · 서쪽 1번 차수판 & 지상 GPS 대피소 연동',
+        title: '서쪽 1번 출구 차수판 확인 및 여의도 지상 대피소 4개소 GPS 레이더 매핑',
+        progressPercent: 72,
+      });
+      appendLog('SENSOR_SYNC', '[AUTO-DEMO] 지상 GPS 대피소 레이더 스캔: 여의도공원 광역대피소(240m)');
+    });
+
+    schedule(24200, () => {
+      setSelectedShelterId('shelter-ifc-atrium');
+    });
+
+    schedule(25600, () => {
+      setSelectedShelterId('shelter-yeouido-high');
+    });
+
+    schedule(26600, () => {
+      setSelectedShelterId('shelter-yeouido-park');
+    });
+
+    // STEP 5 (27.4s): Switch to Overview + AI Verification Loop Tab (99.6% PASS)
+    schedule(27400, () => {
+      setCameraPreset('OVERVIEW');
+      setActiveTab('AI_VERIFY');
+      setDemoBanner({
+        step: 'STEP 5/6 · Gemini 4 Argon 안전 검증 루프',
+        title: '1M 컨텍스트(418.2k 토큰) 멀티모달 추론 및 Companion Verifier 99.6% PASS 검증',
+        progressPercent: 88,
+      });
+      appendLog(
+        'VERIFIER',
+        '[AUTO-DEMO] Gemini 4 Argon + Companion Verifier 안전 검증 99.6% PASS 확인'
+      );
+    });
+
+    // STEP 6 (30.0s): GRAND FINALE — Drainage Pump Recovery, Water Level 0.2m, CLEAR Status!
+    schedule(30000, () => {
+      setCameraPreset('OVERVIEW');
+      setActiveTab('CONTROL');
+      setSelectedLang('ko');
+      setSimulationData((prev) => ({
+        ...prev,
+        status: 'CLEAR',
+        waterLevel: 0.2,
+        scenario: '✅ 배수 펌프 가동 완료 · 승객 120명(교통약자 14명) 전원 안전 대피 성공!',
+        aiReport: {
+          ...prev.aiReport,
+          summary:
+            '배수 펌프 전면 가동으로 여의도역 B2 수위가 0.2m 이하로 안전하게 배수되었습니다. 일반 승객 106명과 교통약자 14명 전원 지상 여의도공원 광역대피소(240m)로 무사히 대피 완료했습니다.',
+        },
+      }));
+      setDemoBanner({
+        step: '🎉 PERFECT DEMO COMPLETE · 완벽한 데모 성공!',
+        title: '배수 펌프 가동 · 수위 0.2m 정상화 · 승객 120명 전원 안전 대피 완료 (100%)',
+        progressPercent: 100,
+      });
+      appendLog(
+        'HITL_GATE',
+        '🎉 [PERFECT DEMO SUCCESS] 배수 완료(0.2m) 및 승객 120명 전원 대피 성공!'
+      );
+      speakTextOutLoud(
+        '배수 펌프 가동 및 승객 전원 대피가 완료되었습니다. 세이프시티 AI 데모 성공.',
+        'ko',
+        1.15
+      );
+    });
+
+    // Cleanly conclude auto-demo banner at 34.5s
+    schedule(34500, () => {
+      setIsAutoDemo(false);
+      setDemoBanner(null);
+    });
+  }, [clearDemoTimers, appendLog, speakTextOutLoud, handleTriggerGpsSync]);
+
+  const handleToggleAutoDemo = useCallback(() => {
+    if (isAutoDemo) {
+      stopAutoDemo();
+    } else {
+      startAutoDemo();
+    }
+  }, [isAutoDemo, stopAutoDemo, startAutoDemo]);
+
+  useEffect(() => {
+    return () => {
+      clearDemoTimers();
+    };
+  }, [clearDemoTimers]);
 
   const handleSimulatePrompt = useCallback(
     async (prompt: string) => {
@@ -264,7 +623,19 @@ export default function SafeCityPage() {
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#020617]">
       {/* Fullscreen 3D WebGL Digital Twin Canvas */}
-      <ThreeViewer simulationData={simulationData} />
+      <ThreeViewer
+        simulationData={simulationData}
+        cameraPreset={cameraPreset}
+        onSelectCameraPreset={(preset) => {
+          if (isAutoDemo) stopAutoDemo();
+          setCameraPreset(preset);
+        }}
+        thermalOptic={thermalOptic}
+        onToggleThermalOptic={() => setThermalOptic((prev) => !prev)}
+        isAutoDemo={isAutoDemo}
+        onToggleAutoDemo={handleToggleAutoDemo}
+        demoBanner={demoBanner}
+      />
 
       {/* Subtle Red Vignette on Critical Flood Danger */}
       {simulationData.status === 'DANGER' && (
@@ -285,6 +656,19 @@ export default function SafeCityPage() {
         onSubmitPrompt={handleSimulatePrompt}
         onManualWaterChange={handleManualWaterChange}
         onHitlApprove={handleHitlApprove}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        selectedLang={selectedLang}
+        onSelectLang={handleSelectLang}
+        isSpeaking={isSpeaking}
+        onToggleSpeak={handleToggleSpeak}
+        checkedItems={checkedItems}
+        onToggleCheckItem={handleToggleCheckItem}
+        selectedShelterId={selectedShelterId}
+        onSelectShelterId={setSelectedShelterId}
+        gpsStatusMsg={gpsStatusMsg}
+        onTriggerGpsSync={handleTriggerGpsSync}
+        onStartAutoDemo={startAutoDemo}
       />
     </main>
   );

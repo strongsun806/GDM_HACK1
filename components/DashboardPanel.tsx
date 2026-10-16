@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   SimulationData,
   AgentLogEntry,
@@ -34,7 +34,11 @@ import {
   ChevronLeft,
   Sliders,
   Compass,
+  Video,
+  Square,
 } from 'lucide-react';
+
+export type ActiveTab = 'CONTROL' | 'GPS_SHELTERS' | 'BROADCAST_CHECK' | 'AI_VERIFY';
 
 interface DashboardPanelProps {
   simulationData: SimulationData;
@@ -43,9 +47,21 @@ interface DashboardPanelProps {
   onSubmitPrompt: (prompt: string) => Promise<void>;
   onManualWaterChange: (waterLevel: number) => void;
   onHitlApprove?: (approved: boolean) => void;
+  // Controlled props for seamless Master Auto-Demo Director synchronization
+  activeTab: ActiveTab;
+  onSelectTab: (tab: ActiveTab) => void;
+  selectedLang: SupportedLang;
+  onSelectLang: (lang: SupportedLang) => void;
+  isSpeaking: boolean;
+  onToggleSpeak: (langOverride?: SupportedLang) => void;
+  checkedItems: Record<number, boolean>;
+  onToggleCheckItem: (idx: number) => void;
+  selectedShelterId: string;
+  onSelectShelterId: (id: string) => void;
+  gpsStatusMsg: string;
+  onTriggerGpsSync: () => void;
+  onStartAutoDemo: () => void;
 }
-
-type ActiveTab = 'CONTROL' | 'GPS_SHELTERS' | 'BROADCAST_CHECK' | 'AI_VERIFY';
 
 const DEFAULT_SHELTERS: SurfaceShelter[] = [
   {
@@ -127,7 +143,7 @@ const QUICK_SCENARIOS = [
   },
 ];
 
-const LANG_CONFIG: Record<
+export const LANG_CONFIG: Record<
   SupportedLang,
   { label: string; flag: string; ttsLang: string }
 > = {
@@ -144,37 +160,32 @@ export default function DashboardPanel({
   onSubmitPrompt,
   onManualWaterChange,
   onHitlApprove,
+  activeTab,
+  onSelectTab,
+  selectedLang,
+  onSelectLang,
+  isSpeaking,
+  onToggleSpeak,
+  checkedItems,
+  onToggleCheckItem,
+  selectedShelterId,
+  onSelectShelterId,
+  gpsStatusMsg,
+  onTriggerGpsSync,
+  onStartAutoDemo,
 }: DashboardPanelProps) {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('CONTROL');
   const [isDockOpen, setIsDockOpen] = useState(true);
   const [promptInput, setPromptInput] = useState('');
-  const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({});
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     simulationData.goldenTimeSeconds ?? 340
   );
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [selectedLang, setSelectedLang] = useState<SupportedLang>('ko');
   const [hitlApproved, setHitlApproved] = useState<boolean>(true);
 
-  // GPS State (Yeouido Station default + Browser Geolocation API)
-  const [gpsCoords, setGpsCoords] = useState<{
-    lat: number;
-    lng: number;
-    accuracy: number;
-    mode: 'STATION_ANCHOR' | 'LIVE_BROWSER_GPS';
-  }>({
-    lat: 37.5216,
-    lng: 126.9242,
-    accuracy: 4.2,
-    mode: 'STATION_ANCHOR',
-  });
-  const [selectedShelterId, setSelectedShelterId] = useState<string>(
-    'shelter-yeouido-park'
-  );
-  const [gpsStatusMsg, setGpsStatusMsg] = useState<string>(
-    '여의도역 B2 고정밀 비콘 + 지상 GPS 동기화 완료'
-  );
+  // Built-in Demo Video Recorder State
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   const shelters =
     simulationData.shelters && simulationData.shelters.length > 0
@@ -182,9 +193,8 @@ export default function DashboardPanel({
       : DEFAULT_SHELTERS;
 
   useEffect(() => {
-    setCheckedItems({ 0: true });
     setRemainingSeconds(simulationData.goldenTimeSeconds ?? 340);
-  }, [simulationData.scenario, simulationData.goldenTimeSeconds]);
+  }, [simulationData.goldenTimeSeconds]);
 
   useEffect(() => {
     if (simulationData.status === 'CLEAR') return;
@@ -199,34 +209,58 @@ export default function DashboardPanel({
     simulationData.voiceBroadcast ||
     simulationData.aiReport.vulnerableNotice;
 
-  const toggleVoiceBroadcast = useCallback(
-    (langOverride?: SupportedLang) => {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-      const targetLang = langOverride || selectedLang;
+  // Built-in 1-Click Screen / Tab Video Recorder (.webm download) + Auto-Starts Demo Tour!
+  const handleToggleScreenRecord = useCallback(async () => {
+    if (isRecording && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      return;
+    }
 
-      if (isSpeaking && !langOverride) {
-        window.speechSynthesis.cancel();
-        setIsSpeaking(false);
-        return;
-      }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 60 },
+        audio: true,
+      });
 
-      window.speechSynthesis.cancel();
-      const text =
-        simulationData.translations?.[targetLang] ||
-        simulationData.voiceBroadcast ||
-        simulationData.aiReport.summary;
+      recordedChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : 'video/webm';
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = LANG_CONFIG[targetLang].ttsLang;
-      utterance.rate = 1.03;
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
 
-      setIsSpeaking(true);
-      window.speechSynthesis.speak(utterance);
-    },
-    [isSpeaking, selectedLang, simulationData]
-  );
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `SafeCity_AI_Demo_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        stream.getTracks().forEach((t) => t.stop());
+        setIsRecording(false);
+      };
+
+      recorder.start(200);
+      setIsRecording(true);
+      // Automatically trigger the full choreographed Auto-Demo Tour 600ms after recording starts!
+      setTimeout(() => {
+        onStartAutoDemo();
+      }, 600);
+    } catch {
+      setIsRecording(false);
+    }
+  }, [isRecording, onStartAutoDemo]);
 
   const handleVoiceMicInput = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -263,40 +297,6 @@ export default function DashboardPanel({
     recognition.onend = () => setIsListening(false);
     recognition.start();
   }, [isListening, onSubmitPrompt]);
-
-  // Real Browser Geolocation Sync
-  const handleSyncBrowserGps = useCallback(() => {
-    if (typeof window === 'undefined' || !('geolocation' in navigator)) {
-      setGpsStatusMsg('브라우저 GPS 미지원 -> 여의도역 기준 좌표 유지');
-      return;
-    }
-    setGpsStatusMsg('실시간 위성 GPS 좌표 수신 중...');
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGpsCoords({
-          lat: Number(pos.coords.latitude.toFixed(4)),
-          lng: Number(pos.coords.longitude.toFixed(4)),
-          accuracy: Number((pos.coords.accuracy || 5).toFixed(1)),
-          mode: 'LIVE_BROWSER_GPS',
-        });
-        setGpsStatusMsg('현장 단말기 실시간 GPS 위성 동기화 완료');
-      },
-      () => {
-        setGpsCoords({
-          lat: 37.5216,
-          lng: 126.9242,
-          accuracy: 3.8,
-          mode: 'STATION_ANCHOR',
-        });
-        setGpsStatusMsg('여의도역 B2 지상 중계기 GPS 좌표(37.5216°N) 고정');
-      },
-      { enableHighAccuracy: true, timeout: 5000 }
-    );
-  }, []);
-
-  const toggleActionItem = (idx: number) => {
-    setCheckedItems((prev) => ({ ...prev, [idx]: !prev[idx] }));
-  };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -339,10 +339,9 @@ export default function DashboardPanel({
   return (
     <div className="pointer-events-none fixed inset-0 z-30 flex flex-col justify-between p-2.5 sm:p-4 overflow-hidden">
       {/* =====================================================================
-          1. COMPACT TOP TELEMETRY BAR (Sleek, Single-Line, Responsive)
+          1. COMPACT TOP TELEMETRY BAR (Includes 1-Click Demo Video Recorder!)
       ===================================================================== */}
       <header className="pointer-events-auto w-full flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-800/90 shadow-2xl">
-        {/* Brand & Track Identity */}
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-cyan-500/15 border border-cyan-400/50 flex items-center justify-center">
             <Waves className="w-4 h-4 text-cyan-400" />
@@ -359,18 +358,15 @@ export default function DashboardPanel({
           </div>
         </div>
 
-        {/* Center Compact Telemetry Pills */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Status Pill */}
+        <div className="flex items-center gap-2 sm:gap-2.5">
           <div
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-bold ${statusBadge.bg}`}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-bold transition-all ${statusBadge.bg}`}
           >
             <span className={`w-2 h-2 rounded-full ${statusBadge.dot} animate-ping`} />
             {statusBadge.icon}
             <span>{statusBadge.label}</span>
           </div>
 
-          {/* Water Level Pill */}
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs font-mono">
             <span className="text-slate-400">수위</span>
             <span className="font-bold text-cyan-300">
@@ -378,7 +374,6 @@ export default function DashboardPanel({
             </span>
           </div>
 
-          {/* Golden Time Pill */}
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs font-mono">
             <Clock className="w-3.5 h-3.5 text-red-400" />
             <span
@@ -392,7 +387,6 @@ export default function DashboardPanel({
             </span>
           </div>
 
-          {/* Evacuees Pill */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs font-mono text-slate-200">
             <Users className="w-3.5 h-3.5 text-emerald-400" />
             <span>{simulationData.totalEvacuees ?? 120}명</span>
@@ -400,6 +394,30 @@ export default function DashboardPanel({
               (♿ {simulationData.vulnerableEvacuees ?? 14})
             </span>
           </div>
+
+          {/* 1-Click Demo Video Recorder Button */}
+          <button
+            type="button"
+            onClick={handleToggleScreenRecord}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-all ${
+              isRecording
+                ? 'bg-red-500/30 border-red-400 text-red-200 animate-pulse'
+                : 'bg-slate-900/90 hover:bg-slate-800 border-rose-500/50 text-rose-300'
+            }`}
+            title="클릭 시 화면 녹화와 동시에 자동 데모 투어가 시작됩니다!"
+          >
+            {isRecording ? (
+              <>
+                <Square className="w-3.5 h-3.5 fill-current text-red-400" />
+                <span>녹화 완료·저장</span>
+              </>
+            ) : (
+              <>
+                <Video className="w-3.5 h-3.5 text-rose-400" />
+                <span className="hidden sm:inline">데모 녹화</span>
+              </>
+            )}
+          </button>
 
           {/* Dock Collapse / Expand Button */}
           <button
@@ -425,18 +443,16 @@ export default function DashboardPanel({
 
       {/* =====================================================================
           2. SINGLE RESPONSIVE TABBED CONTROL DOCK (Right Side, Collapsible)
-          Leaves 82%+ of the 3D Digital Twin completely unobstructed!
       ===================================================================== */}
       {isDockOpen && (
         <aside className="pointer-events-auto self-end my-auto w-full sm:w-[375px] md:w-[400px] max-h-[calc(100vh-125px)] flex flex-col rounded-2xl bg-slate-950/88 backdrop-blur-2xl border border-slate-800/90 shadow-2xl overflow-hidden">
-          {/* 4-Tab Navigation Header */}
           <div className="grid grid-cols-4 gap-1 p-1.5 bg-slate-900/95 border-b border-slate-800">
             <button
               type="button"
-              onClick={() => setActiveTab('CONTROL')}
+              onClick={() => onSelectTab('CONTROL')}
               className={`py-2 px-1 rounded-xl text-[11px] font-bold flex flex-col items-center gap-1 transition-all ${
                 activeTab === 'CONTROL'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 shadow'
+                  ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400 ring-2 ring-cyan-400/30 shadow'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
@@ -446,10 +462,10 @@ export default function DashboardPanel({
 
             <button
               type="button"
-              onClick={() => setActiveTab('GPS_SHELTERS')}
+              onClick={() => onSelectTab('GPS_SHELTERS')}
               className={`py-2 px-1 rounded-xl text-[11px] font-bold flex flex-col items-center gap-1 transition-all ${
                 activeTab === 'GPS_SHELTERS'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow'
+                  ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400 ring-2 ring-emerald-400/30 shadow'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
@@ -459,10 +475,10 @@ export default function DashboardPanel({
 
             <button
               type="button"
-              onClick={() => setActiveTab('BROADCAST_CHECK')}
+              onClick={() => onSelectTab('BROADCAST_CHECK')}
               className={`py-2 px-1 rounded-xl text-[11px] font-bold flex flex-col items-center gap-1 transition-all ${
                 activeTab === 'BROADCAST_CHECK'
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow'
+                  ? 'bg-amber-500/25 text-amber-200 border border-amber-400 ring-2 ring-amber-400/30 shadow'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
@@ -472,10 +488,10 @@ export default function DashboardPanel({
 
             <button
               type="button"
-              onClick={() => setActiveTab('AI_VERIFY')}
+              onClick={() => onSelectTab('AI_VERIFY')}
               className={`py-2 px-1 rounded-xl text-[11px] font-bold flex flex-col items-center gap-1 transition-all ${
                 activeTab === 'AI_VERIFY'
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/50 shadow'
+                  ? 'bg-purple-500/25 text-purple-200 border border-purple-400 ring-2 ring-purple-400/30 shadow'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
               }`}
             >
@@ -484,14 +500,9 @@ export default function DashboardPanel({
             </button>
           </div>
 
-          {/* Scrollable Tab Body */}
           <div className="flex-1 overflow-y-auto p-3.5 space-y-3 custom-scrollbar">
-            {/* ===============================================================
-                TAB 1: REAL-TIME CONTROL & SCENARIOS (Concise, Scannable)
-            =============================================================== */}
             {activeTab === 'CONTROL' && (
               <>
-                {/* Concise Scenario & Status Card */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400">
@@ -508,7 +519,6 @@ export default function DashboardPanel({
                     {simulationData.aiReport.summary}
                   </p>
 
-                  {/* Route Legend Pills */}
                   <div className="grid grid-cols-2 gap-1.5 pt-1">
                     <div className="px-2.5 py-1.5 rounded-lg bg-emerald-950/50 border border-emerald-500/40 flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
@@ -525,7 +535,6 @@ export default function DashboardPanel({
                   </div>
                 </div>
 
-                {/* Interactive Water Level Slider */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
@@ -553,7 +562,6 @@ export default function DashboardPanel({
                   </div>
                 </div>
 
-                {/* 3 One-Click Preset Scenarios */}
                 <div className="space-y-1.5">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
                     원클릭 재난 시나리오 시뮬레이션
@@ -578,12 +586,8 @@ export default function DashboardPanel({
               </>
             )}
 
-            {/* ===============================================================
-                TAB 2: LIVE GPS & NEARBY SURFACE SHELTERS (Track 3 Grounding)
-            =============================================================== */}
             {activeTab === 'GPS_SHELTERS' && (
               <>
-                {/* GPS Telemetry & Radar Visual */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/40 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
@@ -594,7 +598,7 @@ export default function DashboardPanel({
                     </div>
                     <button
                       type="button"
-                      onClick={handleSyncBrowserGps}
+                      onClick={onTriggerGpsSync}
                       className="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/60 text-[10px] font-mono font-bold text-emerald-200 flex items-center gap-1 transition-all"
                     >
                       <Navigation className="w-3 h-3" />
@@ -602,23 +606,19 @@ export default function DashboardPanel({
                     </button>
                   </div>
 
-                  {/* Coordinates & Status */}
                   <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-950/90 border border-slate-800 text-[11px] font-mono">
                     <span className="text-emerald-300 font-bold">
-                      {gpsCoords.lat.toFixed(4)}°N, {gpsCoords.lng.toFixed(4)}°E
+                      37.5216°N, 126.9242°E
                     </span>
-                    <span className="text-slate-400">±{gpsCoords.accuracy}m</span>
+                    <span className="text-slate-400">±3.8m 고정밀</span>
                   </div>
 
-                  {/* Interactive Tactical GPS Radar Map */}
                   <div className="relative h-36 rounded-xl bg-[#04121c] border border-emerald-500/30 overflow-hidden flex items-center justify-center">
-                    {/* Radar Rings */}
                     <div className="w-28 h-28 rounded-full border border-emerald-500/25" />
                     <div className="absolute w-16 h-16 rounded-full border border-emerald-500/35" />
                     <div className="absolute inset-x-0 top-1/2 h-px bg-emerald-500/20" />
                     <div className="absolute inset-y-0 left-1/2 w-px bg-emerald-500/20" />
 
-                    {/* Center Yeouido Station Pin */}
                     <div className="relative z-10 flex flex-col items-center">
                       <span className="w-3 h-3 rounded-full bg-red-500 border-2 border-white animate-ping absolute" />
                       <span className="w-3 h-3 rounded-full bg-red-500 border-2 border-white relative" />
@@ -627,7 +627,6 @@ export default function DashboardPanel({
                       </span>
                     </div>
 
-                    {/* Plotted Nearby Shelters on Radar */}
                     {[
                       { id: 'shelter-yeouido-park', top: '20%', left: '62%', short: '여의도공원(240m)' },
                       { id: 'shelter-ifc-atrium', top: '24%', left: '26%', short: 'IFC몰(310m)' },
@@ -639,11 +638,11 @@ export default function DashboardPanel({
                         <button
                           key={pin.id}
                           type="button"
-                          onClick={() => setSelectedShelterId(pin.id)}
+                          onClick={() => onSelectShelterId(pin.id)}
                           style={{ top: pin.top, left: pin.left }}
                           className={`absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded-full text-[9px] font-mono transition-all flex items-center gap-1 ${
                             isSel
-                              ? 'bg-emerald-500 text-slate-950 font-extrabold scale-110 shadow-lg z-20'
+                              ? 'bg-emerald-400 text-slate-950 font-extrabold scale-115 ring-4 ring-emerald-400/40 shadow-lg z-20'
                               : 'bg-slate-900/90 text-emerald-300 border border-emerald-500/50 hover:scale-105'
                           }`}
                         >
@@ -653,20 +652,19 @@ export default function DashboardPanel({
                       );
                     })}
                   </div>
-                  <p className="text-[10px] font-mono text-slate-400">{gpsStatusMsg}</p>
+                  <p className="text-[10px] font-mono text-emerald-300">{gpsStatusMsg}</p>
                 </div>
 
-                {/* Nearby Surface Shelter List */}
                 <div className="space-y-2">
                   {shelters.map((sh) => {
                     const isSelected = sh.id === selectedShelterId;
                     return (
                       <div
                         key={sh.id}
-                        onClick={() => setSelectedShelterId(sh.id)}
+                        onClick={() => onSelectShelterId(sh.id)}
                         className={`p-2.5 rounded-xl border cursor-pointer transition-all ${
                           isSelected
-                            ? 'bg-emerald-950/40 border-emerald-400/80 shadow-md'
+                            ? 'bg-emerald-950/50 border-emerald-400 ring-2 ring-emerald-400/30 shadow-md'
                             : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
                         }`}
                       >
@@ -718,12 +716,8 @@ export default function DashboardPanel({
               </>
             )}
 
-            {/* ===============================================================
-                TAB 3: 4-LANGUAGE VOICE BROADCAST & FIELD CHECKLIST
-            =============================================================== */}
             {activeTab === 'BROADCAST_CHECK' && (
               <>
-                {/* 4-Language Real-Time TTS Broadcast */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -732,16 +726,16 @@ export default function DashboardPanel({
                     </span>
                     <button
                       type="button"
-                      onClick={() => toggleVoiceBroadcast()}
+                      onClick={() => onToggleSpeak()}
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold flex items-center gap-1 border transition-all ${
                         isSpeaking
-                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 animate-pulse'
+                          ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 ring-2 ring-emerald-400/40 animate-pulse'
                           : 'bg-cyan-500/20 border-cyan-500/50 text-cyan-200 hover:bg-cyan-500/30'
                       }`}
                     >
                       {isSpeaking ? (
                         <>
-                          <VolumeX className="w-3.5 h-3.5" /> 방송 중지
+                          <VolumeX className="w-3.5 h-3.5" /> 음성 송출 중...
                         </>
                       ) : (
                         <>
@@ -751,19 +745,18 @@ export default function DashboardPanel({
                     </button>
                   </div>
 
-                  {/* Language Switcher Pills */}
                   <div className="grid grid-cols-4 gap-1">
                     {(['ko', 'en', 'ja', 'zh'] as SupportedLang[]).map((lang) => (
                       <button
                         key={lang}
                         type="button"
                         onClick={() => {
-                          setSelectedLang(lang);
-                          if (isSpeaking) toggleVoiceBroadcast(lang);
+                          onSelectLang(lang);
+                          onToggleSpeak(lang);
                         }}
                         className={`py-1.5 rounded-lg text-[11px] font-mono font-bold border transition-all ${
                           selectedLang === lang
-                            ? 'bg-cyan-500/25 border-cyan-400 text-white'
+                            ? 'bg-cyan-500/30 border-cyan-400 text-white ring-2 ring-cyan-400/40 scale-105'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                         }`}
                       >
@@ -772,12 +765,11 @@ export default function DashboardPanel({
                     ))}
                   </div>
 
-                  <p className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 text-[11px] text-cyan-100 leading-relaxed">
+                  <p className="p-2.5 rounded-lg bg-slate-950/90 border border-cyan-500/30 text-[11px] text-cyan-100 leading-relaxed">
                     “{currentBroadcastText}”
                   </p>
                 </div>
 
-                {/* Wheelchair / ADA Priority Notice */}
                 <div className="p-3 rounded-xl bg-amber-950/35 border border-amber-500/50 space-y-1">
                   <div className="flex items-center gap-1.5 text-amber-300 text-xs font-bold">
                     <Accessibility className="w-4 h-4" />
@@ -788,7 +780,6 @@ export default function DashboardPanel({
                   </p>
                 </div>
 
-                {/* Interactive Field Checklist */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-200">
@@ -811,10 +802,10 @@ export default function DashboardPanel({
                         <button
                           key={idx}
                           type="button"
-                          onClick={() => toggleActionItem(idx)}
+                          onClick={() => onToggleCheckItem(idx)}
                           className={`w-full text-left p-2 rounded-lg border text-[11px] flex items-start gap-2 transition-all ${
                             done
-                              ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200 line-through opacity-80'
+                              ? 'bg-emerald-950/40 border-emerald-400/60 text-emerald-200'
                               : 'bg-slate-950/80 border-slate-800 text-slate-200 hover:border-slate-700'
                           }`}
                         >
@@ -823,14 +814,15 @@ export default function DashboardPanel({
                           ) : (
                             <Circle className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
                           )}
-                          <span>{item}</span>
+                          <span className={done ? 'line-through opacity-85' : ''}>
+                            {item}
+                          </span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Human-in-the-Loop Commander Gate */}
                 <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <UserCheck className="w-4 h-4 text-emerald-400" />
@@ -862,12 +854,8 @@ export default function DashboardPanel({
               </>
             )}
 
-            {/* ===============================================================
-                TAB 4: GEMINI 4 ARGON × VERIFIER LOOP & 1M CONTEXT
-            =============================================================== */}
             {activeTab === 'AI_VERIFY' && (
               <>
-                {/* 1M Token Context Gauge */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
@@ -903,9 +891,8 @@ export default function DashboardPanel({
                   </div>
                 </div>
 
-                {/* Companion Safety Verifier Checks */}
                 {simulationData.verificationLoop && (
-                  <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2">
+                  <div className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/40 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-emerald-300">
                         교차 검증 신뢰도 (Self-Correction)
@@ -933,7 +920,6 @@ export default function DashboardPanel({
                   </div>
                 )}
 
-                {/* Compact Agent Pipeline Logs */}
                 <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
                     실시간 에이전트 추론 로그
@@ -954,9 +940,6 @@ export default function DashboardPanel({
             )}
           </div>
 
-          {/* =================================================================
-              DOCK FOOTER: NATURAL LANGUAGE / VOICE COMMAND BAR
-          ================================================================= */}
           <form
             onSubmit={handleFormSubmit}
             className="p-2.5 bg-slate-900/95 border-t border-slate-800 flex items-center gap-1.5"

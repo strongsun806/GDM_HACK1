@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef, useMemo, useState, useEffect } from 'react';
+import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Html, Line } from '@react-three/drei';
 import * as THREE from 'three';
@@ -14,21 +14,40 @@ import {
   Crosshair,
   Compass,
   Maximize2,
+  Play,
+  Square,
 } from 'lucide-react';
+
+export type CameraPreset =
+  | 'OVERVIEW'
+  | 'DRONE_CAM'
+  | 'ELEVATOR_CAM'
+  | 'HAZARD_CAM'
+  | 'AUTO_TOUR';
 
 interface ThreeViewerProps {
   simulationData: SimulationData;
-  selectedShelterId?: string;
+  cameraPreset: CameraPreset;
+  onSelectCameraPreset: (preset: CameraPreset) => void;
+  thermalOptic: boolean;
+  onToggleThermalOptic: () => void;
+  isAutoDemo: boolean;
+  onToggleAutoDemo: () => void;
+  demoBanner?: {
+    step: string;
+    title: string;
+    progressPercent: number;
+  } | null;
 }
 
-export type CameraPreset = 'OVERVIEW' | 'DRONE_CAM' | 'ELEVATOR_CAM' | 'HAZARD_CAM';
+/**
+ * Exact interior eye-level camera angle matching the user's preferred screenshot
+ */
+const INITIAL_CAMERA_POS: [number, number, number] = [-3.2, 5.1, 16.8];
+const INITIAL_CAMERA_TARGET: [number, number, number] = [0.8, 1.8, -1.2];
 
 /**
  * 1. Photorealistic Underground Metro Architecture (Yeouido Station B2 Twin)
- * - Octagonal brushed-steel structural columns with capital trusses & water-level rings
- * - Architectural ceiling baffles & recessed LED light coves
- * - Glass Platform Screen Doors (PSD) + Realistic Subway Train with interior lighting & windows
- * - West Exit 1 Flooded Stairwell (with automatic hydraulic floodgate) & East Exit 4 High-Ground Stairwell
  */
 function StationArchitecture({
   waterLevel,
@@ -98,10 +117,15 @@ function StationArchitecture({
 
       {/* Upper Structural Ceiling & Steel Space-Frame Trusses */}
       <group position={[0, 8.2, 0]}>
-        {/* Main Ceiling Deck */}
-        <mesh position={[0, 0.3, 0]}>
-          <boxGeometry args={[48, 0.25, 32]} />
-          <meshStandardMaterial color="#050914" roughness={0.85} metalness={0.5} />
+        {/* One-way architectural ceiling plane: visible from inside looking up, never blocks camera from above */}
+        <mesh position={[0, 0.25, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[48, 32]} />
+          <meshStandardMaterial
+            color="#050914"
+            roughness={0.85}
+            metalness={0.5}
+            side={THREE.FrontSide}
+          />
         </mesh>
 
         {/* Cross Longitudinal Steel I-Beams */}
@@ -124,7 +148,7 @@ function StationArchitecture({
               <meshStandardMaterial
                 color={isPowerCut ? '#f97316' : '#bae6fd'}
                 emissive={isPowerCut ? '#ea580c' : '#38bdf8'}
-                emissiveIntensity={isPowerCut ? 0.9 : 1.6}
+                emissiveIntensity={isPowerCut ? 1.1 : 1.6}
               />
             </mesh>
           </group>
@@ -138,7 +162,6 @@ function StationArchitecture({
             <boxGeometry args={[48, 0.4, 4.2]} />
             <meshStandardMaterial color="#030712" roughness={0.9} metalness={0.3} />
           </mesh>
-          {/* Steel Rails */}
           <mesh position={[0, 0.24, -0.75]}>
             <boxGeometry args={[48, 0.08, 0.1]} />
             <meshStandardMaterial color="#64748b" metalness={0.95} roughness={0.15} />
@@ -150,9 +173,8 @@ function StationArchitecture({
         </group>
       ))}
 
-      {/* Realistic Subway Train Stopped at North Track (Line 5 / Line 9 Transfer) */}
+      {/* Realistic Subway Train Stopped at North Track */}
       <group position={[-2, 1.35, -12.7]}>
-        {/* Train Body Shell */}
         <mesh castShadow receiveShadow>
           <boxGeometry args={[36, 3.1, 3.1]} />
           <meshPhysicalMaterial
@@ -162,14 +184,12 @@ function StationArchitecture({
             clearcoat={0.8}
           />
         </mesh>
-        {/* Aerodynamic Roof AC Units */}
         {[-12, -4, 4, 12].map((rx, i) => (
           <mesh key={i} position={[rx, 1.65, 0]}>
             <boxGeometry args={[4.2, 0.22, 2.1]} />
             <meshStandardMaterial color="#334155" metalness={0.75} roughness={0.35} />
           </mesh>
         ))}
-        {/* Accent Metro Stripe */}
         <mesh position={[0, -0.25, 1.56]}>
           <boxGeometry args={[36.05, 0.24, 0.03]} />
           <meshStandardMaterial
@@ -178,7 +198,6 @@ function StationArchitecture({
             emissiveIntensity={1.1}
           />
         </mesh>
-        {/* Illuminated Passenger Cabin Windows */}
         {[-14, -10.5, -7, -3.5, 0, 3.5, 7, 10.5, 14].map((wx, i) => (
           <mesh key={i} position={[wx, 0.35, 1.56]}>
             <boxGeometry args={[2.3, 1.05, 0.03]} />
@@ -206,12 +225,10 @@ function StationArchitecture({
             transmission={0.55}
           />
         </mesh>
-        {/* Top Digital Signage Header Bar */}
         <mesh position={[0, 1.48, 0]}>
           <boxGeometry args={[44, 0.26, 0.22]} />
           <meshStandardMaterial color="#020617" metalness={0.85} roughness={0.2} />
         </mesh>
-        {/* Glowing Emergency Open Door Indicators */}
         {[-15, -9, -3, 3, 9, 15].map((dx, i) => (
           <mesh key={i} position={[dx, 1.48, 0.12]}>
             <boxGeometry args={[2.2, 0.08, 0.02]} />
@@ -224,17 +241,15 @@ function StationArchitecture({
         ))}
       </group>
 
-      {/* 8 Octagonal Brushed-Steel Structural Columns with Wet Specular Reflection */}
+      {/* 8 Octagonal Brushed-Steel Structural Columns */}
       {pillarPositions.map(([x, z], idx) => {
         const isSubmerged = waterLevel > 0.2;
         return (
           <group key={idx} position={[x, 0, z]}>
-            {/* Reinforced Concrete Pedestal */}
             <mesh position={[0, 0.35, 0]} castShadow receiveShadow>
               <cylinderGeometry args={[0.92, 1.05, 0.7, 8]} />
               <meshStandardMaterial color="#0f172a" roughness={0.35} metalness={0.75} />
             </mesh>
-            {/* Main Octagonal Brushed Aluminum Shaft */}
             <mesh position={[0, 4.1, 0]} castShadow receiveShadow>
               <cylinderGeometry args={[0.72, 0.78, 8.2, 12]} />
               <meshStandardMaterial
@@ -243,12 +258,10 @@ function StationArchitecture({
                 metalness={isSubmerged ? 0.92 : 0.75}
               />
             </mesh>
-            {/* Upper Flared Structural Capital */}
             <mesh position={[0, 7.75, 0]}>
               <cylinderGeometry args={[1.35, 0.72, 0.7, 8]} />
               <meshStandardMaterial color="#0f172a" metalness={0.85} roughness={0.25} />
             </mesh>
-            {/* Emergency Beacon Ring at 3.2m Height */}
             <mesh position={[0, 3.2, 0]}>
               <cylinderGeometry args={[0.76, 0.76, 0.16, 16]} />
               <meshStandardMaterial
@@ -273,7 +286,7 @@ function StationArchitecture({
         );
       })}
 
-      {/* Central Automated Fare Turnstile Array (Free-Pass Open Mode) */}
+      {/* Central Automated Fare Turnstile Array */}
       {[-3.6, -1.8, 0, 1.8, 3.6].map((zOffset, idx) => (
         <group key={idx} position={[3.5, 0.55, zOffset]}>
           <mesh castShadow receiveShadow>
@@ -299,7 +312,6 @@ function StationArchitecture({
             <meshStandardMaterial color="#1e293b" roughness={0.25} metalness={0.7} />
           </mesh>
         ))}
-        {/* Automatic Hydraulic Floodgate Barrier at Top of West Exit 1 */}
         {waterLevel >= 1.0 && (
           <mesh position={[-0.3, 0.85, 0]}>
             <boxGeometry args={[0.22, 1.7, 4.5]} />
@@ -326,7 +338,7 @@ function StationArchitecture({
         )}
       </group>
 
-      {/* EAST EXIT 4 HIGH-GROUND STAIRWELL (Primary Safe Evacuation Exit) */}
+      {/* EAST EXIT 4 HIGH-GROUND STAIRWELL */}
       <group position={[15.5, 0, -10]}>
         {Array.from({ length: 12 }).map((_, i) => (
           <mesh key={i} position={[i * 0.62, i * 0.34 + 0.17, 0]} castShadow receiveShadow>
@@ -339,7 +351,6 @@ function StationArchitecture({
             />
           </mesh>
         ))}
-        {/* Glowing Green Overhead Exit Portal */}
         <mesh position={[7.2, 5.2, 0]}>
           <boxGeometry args={[0.3, 2.4, 4.6]} />
           <meshStandardMaterial
@@ -364,9 +375,8 @@ function StationArchitecture({
         )}
       </group>
 
-      {/* WATERPROOF ELEVATOR #3 SHAFT (ADA / Wheelchair Accessible Safe Evacuation) */}
+      {/* WATERPROOF ELEVATOR #3 SHAFT */}
       <group position={[13, 3.6, -2]}>
-        {/* Glass Elevator Tower */}
         <mesh castShadow receiveShadow>
           <boxGeometry args={[2.9, 7.2, 2.9]} />
           <meshPhysicalMaterial
@@ -380,7 +390,6 @@ function StationArchitecture({
             transmission={0.5}
           />
         </mesh>
-        {/* Structural Corner Frame Posts */}
         {[
           [-1.42, -1.42],
           [1.42, -1.42],
@@ -397,7 +406,6 @@ function StationArchitecture({
             />
           </mesh>
         ))}
-        {/* Illuminated Elevator Car Moving Inside Shaft */}
         <ElevatorCabin />
         {!hideLabels && (
           <Html
@@ -421,7 +429,6 @@ function ElevatorCabin() {
   useFrame(({ clock }) => {
     if (!cabinRef.current) return;
     const t = clock.getElapsedTime();
-    // Smooth vertical shuttle animation between platform (-2.2) and surface (+2.2)
     cabinRef.current.position.y = Math.sin(t * 0.9) * 2.1;
   });
   return (
@@ -468,7 +475,6 @@ function RisingFloodWater({
     []
   );
 
-  // Stairwell cascading flood particles
   const cascadeCount = 160;
   const cascadePositions = useMemo(() => {
     const arr = new Float32Array(cascadeCount * 3);
@@ -532,7 +538,6 @@ function RisingFloodWater({
 
   return (
     <group>
-      {/* Volumetric Deep Flood Water Body */}
       <mesh ref={waterMeshRef} position={[0, 0.01, 0]}>
         <boxGeometry args={[47.6, 1, 31.6]} />
         <meshPhysicalMaterial
@@ -551,7 +556,6 @@ function RisingFloodWater({
         />
       </mesh>
 
-      {/* Caustic Top Water Surface Shimmer Plane */}
       <mesh ref={subSurfaceRef} position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[47.5, 31.5, 24, 24]} />
         <meshStandardMaterial
@@ -564,7 +568,6 @@ function RisingFloodWater({
         />
       </mesh>
 
-      {/* Pillar & Hazard Ripple Foam Rings */}
       <group ref={foamGroupRef}>
         {pillarCoords.map(([x, z], idx) => (
           <mesh key={idx} position={[x, 0, z]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -591,7 +594,6 @@ function RisingFloodWater({
         </mesh>
       </group>
 
-      {/* Cascading Flood Waterfall Particles down West Exit 1 */}
       <points ref={waterfallRef}>
         <bufferGeometry>
           <bufferAttribute
@@ -614,7 +616,7 @@ function RisingFloodWater({
 }
 
 /**
- * 3. Glowing 3D Evacuation Corridor + Animated Passenger Flow Particles + Waypoint Rings
+ * 3. Glowing 3D Evacuation Corridor + Animated Passenger Flow Cones
  */
 function EvacuationCorridor({
   points,
@@ -663,7 +665,6 @@ function EvacuationCorridor({
 
   return (
     <group>
-      {/* Inner High-Luminance Core Tube */}
       <mesh geometry={tubeGeometry}>
         <meshStandardMaterial
           color={color}
@@ -673,12 +674,10 @@ function EvacuationCorridor({
         />
       </mesh>
 
-      {/* Outer Volumetric Glow Tube */}
       <mesh geometry={outerGlowGeometry}>
         <meshBasicMaterial color={secondaryColor} transparent opacity={0.22} />
       </mesh>
 
-      {/* Moving Light Chevrons Indicating Evacuation Direction */}
       <group ref={flowGroupRef}>
         {Array.from({ length: beaconCount }).map((_, idx) => (
           <mesh key={idx}>
@@ -688,7 +687,6 @@ function EvacuationCorridor({
         ))}
       </group>
 
-      {/* Waypoint Floor Halo Rings */}
       {points.map((pt, idx) => (
         <mesh key={idx} position={[pt[0], pt[1] + 0.05, pt[2]]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.35, 0.58, 24]} />
@@ -700,7 +698,7 @@ function EvacuationCorridor({
 }
 
 /**
- * 4. Compact Pulsing Hazard Zone (Zero giant HTML explosion!)
+ * 4. Compact Pulsing Hazard Zone
  */
 function HazardZoneMarker({
   position,
@@ -733,7 +731,6 @@ function HazardZoneMarker({
 
   return (
     <group position={position}>
-      {/* Rotating Holographic Octahedron Core */}
       <mesh ref={cageRef} position={[0, 1.2, 0]}>
         <octahedronGeometry args={[1.35, 0]} />
         <meshStandardMaterial
@@ -744,7 +741,6 @@ function HazardZoneMarker({
         />
       </mesh>
 
-      {/* Expanding Ground Sonar Ring */}
       <mesh ref={ringRef} position={[0, 0.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[1.5, 1.85, 32]} />
         <meshBasicMaterial
@@ -755,7 +751,6 @@ function HazardZoneMarker({
         />
       </mesh>
 
-      {/* Compact Fixed-Size Micro-Pin (Hidden in DRONE_CAM so it never blocks view) */}
       {!hideLabels && (
         <Html
           position={[0, 3.1, 0]}
@@ -774,8 +769,6 @@ function HazardZoneMarker({
 
 /**
  * 5. Autonomous Rescue Scout Drone (UAV-01)
- * - Hidden or semi-transparent when camera is in First-Person Drone Gimbal mode (`DRONE_CAM`)
- *   so the drone mesh/label NEVER blocks the first-person camera!
  */
 function AutonomousScoutDrone({
   target,
@@ -822,7 +815,6 @@ function AutonomousScoutDrone({
 
   return (
     <group ref={droneGroupRef} position={target}>
-      {/* Hide physical chassis & HTML tag in First-Person Drone POV so view is 100% unobstructed */}
       {!isDroneFpv && (
         <>
           <mesh castShadow>
@@ -857,7 +849,6 @@ function AutonomousScoutDrone({
             </group>
           ))}
 
-          {/* Volumetric LiDAR Searchlight Cone */}
           <mesh position={[0, -2.1, 0]}>
             <coneGeometry args={[2.1, 4.0, 24, 1, true]} />
             <meshBasicMaterial
@@ -882,83 +873,106 @@ function AutonomousScoutDrone({
         </>
       )}
 
-      {/* Downward Gimbal Spotlight (Active in both 3rd-person and 1st-person FPV) */}
       <pointLight position={[0, -0.35, 0]} intensity={4.5} distance={18} color={beamColor} />
     </group>
   );
 }
 
 /**
- * 6. Camera Rig with True First-Person Drone Gimbal POV (`DRONE_CAM`)
+ * 6. Buttery-Smooth Camera Rig:
+ *    - Never snaps abruptly; uses smooth exponential damping across ALL presets
+ *    - During OVERVIEW in Auto-Demo, adds a subtle cinematic dolly motion
  */
 function CameraController({
   preset,
   droneTarget,
   dangerZone,
+  isAutoDemo,
 }: {
   preset: CameraPreset;
   droneTarget: Vec3;
   dangerZone: Vec3;
+  isAutoDemo: boolean;
 }) {
   const { camera } = useThree();
   const controlsRef = useRef<any>(null);
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (!initializedRef.current && controlsRef.current) {
+      camera.position.set(...INITIAL_CAMERA_POS);
+      controlsRef.current.target.set(...INITIAL_CAMERA_TARGET);
+      controlsRef.current.update();
+      initializedRef.current = true;
+    }
+  }, [camera]);
 
   useFrame(({ clock }, delta) => {
     if (!controlsRef.current) return;
     const t = clock.getElapsedTime();
+    const smoothSpeed = Math.min(1, delta * 2.4);
 
     if (preset === 'DRONE_CAM') {
-      // TRUE FIRST-PERSON DRONE GIMBAL POV:
-      // Camera is mounted directly under UAV-01's belly gimbal, looking down at the flood/evacuation zone!
-      const gimbalX = droneTarget[0] + Math.sin(t * 1.1) * 1.4;
-      const gimbalY = Math.max(4.6, droneTarget[1] + 1.0) + Math.sin(t * 2.0) * 0.15;
-      const gimbalZ = droneTarget[2] + Math.cos(t * 1.1) * 1.4;
+      const gimbalX = droneTarget[0] + Math.sin(t * 0.9) * 1.5;
+      const gimbalY = Math.max(4.6, droneTarget[1] + 1.0) + Math.sin(t * 1.6) * 0.14;
+      const gimbalZ = droneTarget[2] + Math.cos(t * 0.9) * 1.5;
 
-      // Look downward and slightly toward the station center / hazard front
-      const lookX = dangerZone[0] * 0.55 + Math.sin(t * 0.6) * 1.8;
-      const lookY = 0.2;
-      const lookZ = dangerZone[2] * 0.55 + Math.cos(t * 0.6) * 1.8;
+      const lookX = dangerZone[0] * 0.55 + Math.sin(t * 0.5) * 1.6;
+      const lookY = 0.3;
+      const lookZ = dangerZone[2] * 0.55 + Math.cos(t * 0.5) * 1.6;
 
-      camera.position.lerp(new THREE.Vector3(gimbalX, gimbalY, gimbalZ), Math.min(1, delta * 4.5));
-      controlsRef.current.target.lerp(
-        new THREE.Vector3(lookX, lookY, lookZ),
-        Math.min(1, delta * 5.0)
-      );
+      camera.position.lerp(new THREE.Vector3(gimbalX, gimbalY, gimbalZ), smoothSpeed * 1.4);
+      controlsRef.current.target.lerp(new THREE.Vector3(lookX, lookY, lookZ), smoothSpeed * 1.4);
       controlsRef.current.update();
     } else if (preset === 'ELEVATOR_CAM') {
-      camera.position.lerp(new THREE.Vector3(6.5, 4.8, 6.2), Math.min(1, delta * 3.2));
-      controlsRef.current.target.lerp(new THREE.Vector3(13, 2.2, -2), Math.min(1, delta * 3.2));
+      const swayX = Math.sin(t * 0.5) * 0.8;
+      camera.position.lerp(new THREE.Vector3(5.2 + swayX, 4.3, 6.4), smoothSpeed);
+      controlsRef.current.target.lerp(new THREE.Vector3(13, 2.3, -2), smoothSpeed);
       controlsRef.current.update();
     } else if (preset === 'HAZARD_CAM') {
+      const swayZ = Math.cos(t * 0.5) * 0.8;
       camera.position.lerp(
-        new THREE.Vector3(dangerZone[0] + 6.5, 5.2, dangerZone[2] - 7.5),
-        Math.min(1, delta * 3.2)
+        new THREE.Vector3(dangerZone[0] + 7.8, 4.6, dangerZone[2] - 6.2 + swayZ),
+        smoothSpeed
       );
       controlsRef.current.target.lerp(
-        new THREE.Vector3(dangerZone[0], 1.0, dangerZone[2]),
-        Math.min(1, delta * 3.2)
+        new THREE.Vector3(dangerZone[0], 1.2, dangerZone[2]),
+        smoothSpeed
+      );
+      controlsRef.current.update();
+    } else if (preset === 'AUTO_TOUR') {
+      const camX = Math.sin(t * 0.35) * 9.5 - 1.0;
+      const camY = 4.9 + Math.sin(t * 0.45) * 0.5;
+      const camZ = Math.cos(t * 0.35) * 13.5 + 3.0;
+      camera.position.lerp(new THREE.Vector3(camX, camY, camZ), smoothSpeed);
+      controlsRef.current.target.lerp(new THREE.Vector3(1.5, 1.7, -1.5), smoothSpeed);
+      controlsRef.current.update();
+    } else if (preset === 'OVERVIEW' && isAutoDemo) {
+      // Smoothly glide back to the signature interior overview angle with subtle breathing motion
+      const breatheX = INITIAL_CAMERA_POS[0] + Math.sin(t * 0.4) * 1.1;
+      const breatheZ = INITIAL_CAMERA_POS[2] + Math.cos(t * 0.4) * 0.8;
+      camera.position.lerp(
+        new THREE.Vector3(breatheX, INITIAL_CAMERA_POS[1], breatheZ),
+        smoothSpeed
+      );
+      controlsRef.current.target.lerp(
+        new THREE.Vector3(...INITIAL_CAMERA_TARGET),
+        smoothSpeed
       );
       controlsRef.current.update();
     }
   });
 
-  useEffect(() => {
-    if (preset === 'OVERVIEW' && controlsRef.current) {
-      camera.position.set(0, 21, 27);
-      controlsRef.current.target.set(0, 1, 0);
-      controlsRef.current.update();
-    }
-  }, [preset, camera]);
-
   return (
     <OrbitControls
       ref={controlsRef}
       makeDefault
+      target={INITIAL_CAMERA_TARGET}
       enableDamping
-      dampingFactor={0.06}
+      dampingFactor={0.05}
       maxPolarAngle={Math.PI / 2 - 0.03}
       minDistance={3}
-      maxDistance={52}
+      maxDistance={28}
     />
   );
 }
@@ -966,15 +980,20 @@ function CameraController({
 /**
  * Main Exported Client Component: ThreeViewer
  */
-export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
-  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
-  const [thermalOptic, setThermalOptic] = useState(false);
-
+export default function ThreeViewer({
+  simulationData,
+  cameraPreset,
+  onSelectCameraPreset,
+  thermalOptic,
+  onToggleThermalOptic,
+  isAutoDemo,
+  onToggleAutoDemo,
+  demoBanner,
+}: ThreeViewerProps) {
   const isDanger = simulationData.status === 'DANGER';
   const isPowerCut = simulationData.waterLevel >= 1.5;
   const isDroneFpv = cameraPreset === 'DRONE_CAM';
 
-  // Connecting vertical evacuation line at East Exit 4
   const surfaceExitBridge: Vec3[] = useMemo(() => {
     const lastNode =
       simulationData.evacuationPath[simulationData.evacuationPath.length - 1] || [15, 0.5, -10];
@@ -985,21 +1004,20 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
     <div className="relative w-full h-screen bg-[#020617] select-none overflow-hidden">
       <Canvas
         shadows
-        camera={{ position: [0, 21, 27], fov: 45, near: 0.1, far: 200 }}
+        camera={{ position: INITIAL_CAMERA_POS, fov: 46, near: 0.1, far: 200 }}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
       >
         <color attach="background" args={[isDroneFpv && thermalOptic ? '#041019' : '#020617']} />
         <fog
           attach="fog"
-          args={[isDroneFpv && thermalOptic ? '#041019' : '#020617', 20, 68]}
+          args={[isDroneFpv && thermalOptic ? '#041019' : '#020617', 22, 68]}
         />
 
-        {/* Balanced Architectural & Emergency Lighting */}
-        <ambientLight intensity={isPowerCut ? 0.45 : 0.72} color="#e2e8f0" />
+        <ambientLight intensity={isPowerCut ? 0.48 : 0.75} color="#e2e8f0" />
         <hemisphereLight
           color="#38bdf8"
           groundColor="#0f172a"
-          intensity={isDroneFpv ? 0.9 : 0.65}
+          intensity={isDroneFpv ? 0.95 : 0.7}
         />
         <directionalLight
           castShadow
@@ -1009,7 +1027,6 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
           shadow-mapSize={[1024, 1024]}
         />
 
-        {/* Emergency Strobe Lights */}
         <pointLight
           position={[-14, 6.2, 9]}
           intensity={isDanger ? 5.0 : 1.5}
@@ -1029,20 +1046,17 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
           color="#eab308"
         />
 
-        {/* 1. Station Architecture */}
         <StationArchitecture
           waterLevel={simulationData.waterLevel}
           status={simulationData.status}
           hideLabels={isDroneFpv}
         />
 
-        {/* 2. Rising Hydrodynamic Flood Water */}
         <RisingFloodWater
           targetWaterLevel={simulationData.waterLevel}
           dangerZone={simulationData.dangerZone}
         />
 
-        {/* 3. General Evacuation Corridor (Neon Emerald) */}
         <EvacuationCorridor
           points={simulationData.evacuationPath}
           color="#10b981"
@@ -1051,7 +1065,6 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         />
         <Line points={surfaceExitBridge} color="#10b981" lineWidth={3} dashed={false} />
 
-        {/* 4. Wheelchair / Vulnerable Evacuation Corridor (Neon Amber) */}
         <EvacuationCorridor
           points={simulationData.vulnerablePath}
           color="#facc15"
@@ -1059,43 +1072,64 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
           pulseSpeed={4.0}
         />
 
-        {/* 5. Hazard Marker */}
         <HazardZoneMarker
           position={simulationData.dangerZone}
           status={simulationData.status}
           hideLabels={isDroneFpv}
         />
 
-        {/* 6. Autonomous Scout Drone */}
         <AutonomousScoutDrone
           target={simulationData.droneTarget}
           status={simulationData.status}
           isDroneFpv={isDroneFpv}
         />
 
-        {/* 7. Camera Preset Controller */}
         <CameraController
           preset={cameraPreset}
           droneTarget={simulationData.droneTarget}
           dangerZone={simulationData.dangerZone}
+          isAutoDemo={isAutoDemo}
         />
       </Canvas>
 
       {/* =====================================================================
-          TRUE FIRST-PERSON DRONE GIMBAL HUD OVERLAY (Active ONLY in DRONE_CAM)
-          Pure pointer-events-none so all buttons remain 100% clickable!
+          CINEMATIC AUTO-DEMO DIRECTOR BANNER & PROGRESS BAR
       ===================================================================== */}
+      {demoBanner && (
+        <div className="pointer-events-none fixed top-16 left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-xl rounded-2xl bg-slate-950/92 backdrop-blur-xl border border-cyan-400/80 shadow-2xl px-4 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping shrink-0" />
+              <span className="px-2 py-0.5 rounded bg-cyan-500/25 border border-cyan-400/60 text-[10px] font-mono font-extrabold text-cyan-300">
+                {demoBanner.step}
+              </span>
+              <span className="text-xs sm:text-sm font-bold text-white truncate">
+                {demoBanner.title}
+              </span>
+            </div>
+            <span className="text-[11px] font-mono font-bold text-emerald-300 shrink-0">
+              {demoBanner.progressPercent}%
+            </span>
+          </div>
+          <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden mt-2">
+            <div
+              className="h-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-amber-400 transition-all duration-300"
+              style={{ width: `${demoBanner.progressPercent}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* TRUE FIRST-PERSON DRONE GIMBAL HUD OVERLAY */}
       {isDroneFpv && (
         <div
           aria-hidden="true"
           className="pointer-events-none fixed inset-0 z-20 flex items-center justify-center overflow-hidden"
         >
-          {/* Optional Thermal / Night-Vision Filter Tint */}
           {thermalOptic && (
-            <div className="absolute inset-0 bg-cyan-500/10 mix-blend-screen" />
+            <div className="absolute inset-0 bg-cyan-500/12 mix-blend-screen" />
           )}
 
-          {/* Subtle Scanline Grid */}
           <div
             className="absolute inset-0 opacity-20"
             style={{
@@ -1105,29 +1139,25 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
             }}
           />
 
-          {/* Top-Center Drone Gimbal Telemetry Banner */}
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 flex items-center gap-4 px-4 py-1.5 rounded-full bg-slate-950/85 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 shadow-lg">
+          <div className="absolute top-28 left-1/2 -translate-x-1/2 flex items-center gap-4 px-4 py-1.5 rounded-full bg-slate-950/85 border border-cyan-500/50 text-[11px] font-mono text-cyan-300 shadow-lg">
             <span className="flex items-center gap-1.5 text-red-400 font-bold">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
               REC · UAV-01 FPV GIMBAL
             </span>
             <span>ALT: {(simulationData.droneTarget[1] + 1.0).toFixed(1)}m</span>
-            <span>PITCH: -42° DOWN</span>
+            <span>OPTIC: {thermalOptic ? 'THERMAL IR' : 'DAYLIGHT HD'}</span>
             <span>WATER: {simulationData.waterLevel.toFixed(1)}m</span>
             <span className="hidden sm:inline text-emerald-300">
               GPS: 37.5216°N 126.9242°E
             </span>
           </div>
 
-          {/* Center Tactical Crosshair & Target Lock Reticle */}
           <div className="relative w-72 h-72 sm:w-96 sm:h-96 flex items-center justify-center">
-            {/* Corner Brackets */}
             <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-cyan-400/80" />
             <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-cyan-400/80" />
             <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-cyan-400/80" />
             <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-cyan-400/80" />
 
-            {/* Pitch Ladder Bars */}
             <div className="absolute left-6 top-1/2 -translate-y-1/2 flex flex-col gap-4 text-[9px] font-mono text-cyan-400/80">
               <span>+15° ──</span>
               <span className="text-cyan-200 font-bold">00° ───</span>
@@ -1141,12 +1171,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
               <span>── EVAC 120P</span>
             </div>
 
-            {/* Center Reticle Ring */}
             <div className="w-20 h-20 rounded-full border border-cyan-400/60 flex items-center justify-center">
               <Crosshair className="w-6 h-6 text-red-400/90 animate-pulse" />
             </div>
 
-            {/* Bottom Reticle Caption */}
             <div className="absolute -bottom-7 px-2.5 py-0.5 rounded bg-slate-950/90 border border-red-500/60 text-[10px] font-mono text-red-300">
               TARGET LOCK: [{simulationData.dangerZone.join(', ')}] · 침수 유입원 실시간 감시 중
             </div>
@@ -1154,9 +1182,7 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         </div>
       )}
 
-      {/* =====================================================================
-          BOTTOM-LEFT CAMERA & OPTICS SWITCHER BAR (z-30 so ALWAYS clickable!)
-      ===================================================================== */}
+      {/* BOTTOM-LEFT CAMERA SWITCHER + 1-CLICK DEMO TOUR DIRECTOR */}
       <div className="fixed bottom-4 left-4 z-30 flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-slate-950/90 backdrop-blur-xl border border-slate-700/80 shadow-2xl">
         <span className="px-2 py-1 text-[10px] font-mono text-slate-400 uppercase tracking-wider flex items-center gap-1">
           <Camera className="w-3.5 h-3.5 text-cyan-400" />
@@ -1164,10 +1190,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         </span>
         <button
           type="button"
-          onClick={() => setCameraPreset('OVERVIEW')}
+          onClick={() => onSelectCameraPreset('OVERVIEW')}
           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
             cameraPreset === 'OVERVIEW'
-              ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/70 shadow-sm'
+              ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-400 ring-2 ring-cyan-400/30 shadow-sm'
               : 'text-slate-300 hover:bg-slate-800/90 border border-transparent'
           }`}
         >
@@ -1176,10 +1202,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         </button>
         <button
           type="button"
-          onClick={() => setCameraPreset('DRONE_CAM')}
+          onClick={() => onSelectCameraPreset('DRONE_CAM')}
           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
             cameraPreset === 'DRONE_CAM'
-              ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400/70 shadow-sm'
+              ? 'bg-cyan-500/30 text-cyan-200 border border-cyan-400 ring-2 ring-cyan-400/30 shadow-sm'
               : 'text-slate-300 hover:bg-slate-800/90 border border-transparent'
           }`}
         >
@@ -1188,10 +1214,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         </button>
         <button
           type="button"
-          onClick={() => setCameraPreset('ELEVATOR_CAM')}
+          onClick={() => onSelectCameraPreset('ELEVATOR_CAM')}
           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
             cameraPreset === 'ELEVATOR_CAM'
-              ? 'bg-amber-500/25 text-amber-200 border border-amber-400/70 shadow-sm'
+              ? 'bg-amber-500/30 text-amber-200 border border-amber-400 ring-2 ring-amber-400/30 shadow-sm'
               : 'text-slate-300 hover:bg-slate-800/90 border border-transparent'
           }`}
         >
@@ -1200,10 +1226,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
         </button>
         <button
           type="button"
-          onClick={() => setCameraPreset('HAZARD_CAM')}
+          onClick={() => onSelectCameraPreset('HAZARD_CAM')}
           className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
             cameraPreset === 'HAZARD_CAM'
-              ? 'bg-red-500/25 text-red-200 border border-red-400/70 shadow-sm'
+              ? 'bg-red-500/30 text-red-200 border border-red-400 ring-2 ring-red-400/30 shadow-sm'
               : 'text-slate-300 hover:bg-slate-800/90 border border-transparent'
           }`}
         >
@@ -1211,13 +1237,37 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
           침수 구역
         </button>
 
+        {/* 1-Click Auto Demo Tour Button */}
+        <button
+          type="button"
+          onClick={onToggleAutoDemo}
+          className={`ml-1 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 border transition-all ${
+            isAutoDemo
+              ? 'bg-red-500/30 border-red-400 text-red-200 ring-2 ring-red-400/40 animate-pulse'
+              : 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-400/70 text-emerald-200'
+          }`}
+          title="음성 안내방송·탭 전환·카메라 시점이 모두 자동으로 클릭되는 완벽 데모 시연"
+        >
+          {isAutoDemo ? (
+            <>
+              <Square className="w-3.5 h-3.5 fill-current" />
+              자동투어 중지
+            </>
+          ) : (
+            <>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              🎬 데모 자동투어
+            </>
+          )}
+        </button>
+
         {isDroneFpv && (
           <button
             type="button"
-            onClick={() => setThermalOptic((prev) => !prev)}
+            onClick={onToggleThermalOptic}
             className={`ml-1 px-2.5 py-1.5 rounded-lg text-xs font-mono font-bold flex items-center gap-1 border transition-all ${
               thermalOptic
-                ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200'
+                ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 ring-2 ring-emerald-400/40'
                 : 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white'
             }`}
           >
@@ -1226,10 +1276,10 @@ export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
           </button>
         )}
 
-        {cameraPreset !== 'OVERVIEW' && (
+        {cameraPreset !== 'OVERVIEW' && !isAutoDemo && (
           <button
             type="button"
-            onClick={() => setCameraPreset('OVERVIEW')}
+            onClick={() => onSelectCameraPreset('OVERVIEW')}
             className="ml-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-cyan-300 flex items-center gap-1 border border-slate-600"
             title="전체 뷰로 복귀"
           >
