@@ -1,249 +1,169 @@
-"use client";
+'use client';
 
-import React, { useMemo, useRef, useEffect, useState } from "react";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Html } from "@react-three/drei";
-import * as THREE from "three";
-import { SimulationData, Vec3 } from "@/types/simulation";
-import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import React, { useRef, useMemo, useEffect, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, Html, Line } from '@react-three/drei';
+import * as THREE from 'three';
+import { SimulationData } from '@/types/simulation';
+import { Camera, Video, ShieldAlert, Accessibility, Cpu, Eye } from 'lucide-react';
 
 interface ThreeViewerProps {
-  simulation: SimulationData;
-  scenarioTrigger?: number;
+  simulationData: SimulationData;
 }
 
-const PILLAR_COORDS: [number, number][] = [
-  [-12, -6],
-  [-12, 2],
-  [-12, 9],
-  [-4, -6],
-  [-4, 2],
-  [-4, 9],
-  [4, -6],
-  [4, 2],
-  [4, 9],
-  [12, -6],
-  [12, 2],
-  [12, 9],
-];
+type CameraPreset = 'OVERVIEW' | 'FLOOD_STAIRS' | 'ELEVATOR_ADA' | 'DRONE_CAM';
 
 /**
- * 1. 바닥 & 벽면 메탈 타일 그리드 CanvasTexture 생성기
+ * Procedural scrolling neon chevron texture for evacuation tubes
  */
-function createMetalTileTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d")!;
+function useFlowingArrowTexture(primaryColor: string, accentColor: string) {
+  return useMemo(() => {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#020617';
+      ctx.fillRect(0, 0, 256, 64);
 
-  // 베이스 다크 메탈 타일
-  ctx.fillStyle = "#0b1324";
-  ctx.fillRect(0, 0, 512, 512);
+      const grad = ctx.createLinearGradient(0, 0, 256, 0);
+      grad.addColorStop(0.0, 'rgba(0,0,0,0.15)');
+      grad.addColorStop(0.45, primaryColor);
+      grad.addColorStop(0.75, accentColor);
+      grad.addColorStop(1.0, 'rgba(0,0,0,0.15)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 8, 256, 48);
 
-  // 서브 타일 격자 (4x4)
-  const step = 128;
-  for (let y = 0; y < 512; y += step) {
-    for (let x = 0; x < 512; x += step) {
-      ctx.fillStyle = (x / step + y / step) % 2 === 0 ? "#0f172a" : "#0b1324";
-      ctx.fillRect(x + 2, y + 2, step - 4, step - 4);
-
-      // 타일 메탈 베벨 하이라이트
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.16)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 3, y + 3, step - 6, step - 6);
-
-      // 코너 리벳 포인트
-      ctx.fillStyle = "rgba(148, 163, 184, 0.35)";
-      ctx.fillRect(x + 8, y + 8, 4, 4);
-      ctx.fillRect(x + step - 12, y + 8, 4, 4);
-      ctx.fillRect(x + 8, y + step - 12, 4, 4);
-      ctx.fillRect(x + step - 12, y + step - 12, 4, 4);
+      // Draw crisp directional chevrons
+      ctx.fillStyle = '#ffffff';
+      for (let offset = 28; offset < 240; offset += 64) {
+        ctx.beginPath();
+        ctx.moveTo(offset, 12);
+        ctx.lineTo(offset + 28, 32);
+        ctx.lineTo(offset, 52);
+        ctx.lineTo(offset + 12, 52);
+        ctx.lineTo(offset + 40, 32);
+        ctx.lineTo(offset + 12, 12);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
-  }
-
-  // 메인 섹션 네온 그리드 보더
-  ctx.strokeStyle = "rgba(6, 182, 212, 0.42)";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(0, 0, 512, 512);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(10, 8);
-  texture.needsUpdate = true;
-  return texture;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(14, 1);
+    return texture;
+  }, [primaryColor, accentColor]);
 }
 
 /**
- * 2. 물 표면 일렁이는 코어스틱(Water Caustics & Ripple) CanvasTexture 생성기
+ * Procedural granite tile floor texture for realistic underground station
  */
-function createWaterCausticsTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d")!;
+function useSubwayTileTexture() {
+  return useMemo(() => {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 0, 512, 512);
 
-  ctx.fillStyle = "#0369a1";
-  ctx.fillRect(0, 0, 512, 512);
+      // Subtle stone tile blocks
+      const step = 64;
+      for (let y = 0; y < 512; y += step) {
+        for (let x = 0; x < 512; x += step) {
+          const shade = 26 + ((x * 7 + y * 13) % 10);
+          ctx.fillStyle = `rgb(${shade}, ${shade + 8}, ${shade + 20})`;
+          ctx.fillRect(x + 2, y + 2, step - 4, step - 4);
+        }
+      }
 
-  // 물결 코어스틱 네온 라인 패턴
-  for (let i = 0; i < 42; i++) {
-    const x = ((i * 73) % 512);
-    const y = ((i * 119) % 512);
-    const r = 28 + (i % 5) * 16;
-    const grad = ctx.createRadialGradient(x, y, 2, x, y, r);
-    grad.addColorStop(0, "rgba(125, 211, 252, 0.45)");
-    grad.addColorStop(0.6, "rgba(14, 165, 233, 0.18)");
-    grad.addColorStop(1, "rgba(3, 105, 161, 0)");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
+      // Grout lines
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 3;
+      for (let i = 0; i <= 512; i += step) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i, 512);
+        ctx.stroke();
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(5, 4);
-  texture.needsUpdate = true;
-  return texture;
+        ctx.beginPath();
+        ctx.moveTo(0, i);
+        ctx.lineTo(512, i);
+        ctx.stroke();
+      }
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(16, 12);
+    return texture;
+  }, []);
 }
 
 /**
- * 3. 대피선 TubeGeometry 전용 흐르는 화살표(Flowing Neon Arrows) CanvasTexture 생성기
- * texture.offset.x를 실시간으로 이동시켜 탈출구 방향으로 화살표 불빛이 빠르게 질주하는 효과 구현
+ * Camera Rig that smoothly transitions when user clicks a camera preset button,
+ * while yielding back to OrbitControls for manual inspection.
  */
-function createFlowingArrowTexture(hexColor: string): THREE.CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 128;
-  const ctx = canvas.getContext("2d")!;
-
-  // 반투명 다크 네온 베이스
-  ctx.fillStyle = "#04101f";
-  ctx.fillRect(0, 0, 256, 128);
-
-  // 양측 가이드 발광 스트라이프
-  ctx.fillStyle = hexColor;
-  ctx.fillRect(0, 0, 256, 14);
-  ctx.fillRect(0, 114, 256, 14);
-
-  // 중앙 고휘도 화살표(Chevron >>>) 패턴 2연속 배치
-  const drawChevron = (offsetX: number) => {
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(offsetX + 20, 24);
-    ctx.lineTo(offsetX + 75, 24);
-    ctx.lineTo(offsetX + 115, 64);
-    ctx.lineTo(offsetX + 75, 104);
-    ctx.lineTo(offsetX + 20, 104);
-    ctx.lineTo(offsetX + 60, 64);
-    ctx.closePath();
-
-    ctx.fillStyle = "#ffffff";
-    ctx.shadowColor = hexColor;
-    ctx.shadowBlur = 18;
-    ctx.fill();
-    ctx.restore();
-  };
-
-  drawChevron(10);
-  drawChevron(130);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(16, 2);
-  texture.needsUpdate = true;
-  return texture;
-}
-
-/**
- * 씬 전체에 THREE.FogExp2('#020617', 0.022) 적용 컴포넌트
- */
-function ExponentialSceneFog() {
-  const { scene } = useThree();
-
-  useEffect(() => {
-    // 어둡고 축축한 지하철역 분위기를 위한 지수 안개(FogExp2) 적용
-    scene.fog = new THREE.FogExp2("#020617", 0.02);
-    scene.background = new THREE.Color("#020617");
-    return () => {
-      scene.fog = null;
-    };
-  }, [scene]);
-
-  return null;
-}
-
-/**
- * 시네마틱 카메라 오빗 & 줌인 리그
- */
-function CinematicCameraRig({
-  simulation,
-  scenarioTrigger = 0,
+function CameraController({
+  preset,
+  simulationData,
   controlsRef,
 }: {
-  simulation: SimulationData;
-  scenarioTrigger?: number;
-  controlsRef: React.RefObject<OrbitControlsImpl | null>;
+  preset: CameraPreset;
+  simulationData: SimulationData;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  controlsRef: React.RefObject<any>;
 }) {
   const { camera } = useThree();
-  const animStartRef = useRef<number>(0);
-  const isAnimatingRef = useRef<boolean>(true);
-  const startAngleRef = useRef<number>(0.85);
+  const transitionFrames = useRef(0);
+  const lastPreset = useRef<CameraPreset>(preset);
 
   useEffect(() => {
-    animStartRef.current = performance.now();
-    isAnimatingRef.current = true;
-    startAngleRef.current = 0.65 + (scenarioTrigger % 3) * 0.3;
-  }, [simulation.scenario, simulation.droneTarget, scenarioTrigger]);
-
-  useEffect(() => {
-    const stopAnimation = () => {
-      isAnimatingRef.current = false;
-    };
-    window.addEventListener("pointerdown", stopAnimation);
-    window.addEventListener("wheel", stopAnimation);
-    return () => {
-      window.removeEventListener("pointerdown", stopAnimation);
-      window.removeEventListener("wheel", stopAnimation);
-    };
-  }, []);
+    if (lastPreset.current !== preset) {
+      lastPreset.current = preset;
+      transitionFrames.current = 75;
+    }
+  }, [preset]);
 
   useFrame((_, delta) => {
-    if (!isAnimatingRef.current) return;
-
-    const elapsed = (performance.now() - animStartRef.current) / 1000;
-    const duration = 3.2;
-    if (elapsed >= duration) {
-      isAnimatingRef.current = false;
+    if (preset === 'DRONE_CAM') {
+      const [dx, dy, dz] = simulationData.droneTarget;
+      const desiredPos = new THREE.Vector3(dx - 5.5, dy + 3.2, dz + 6.5);
+      const desiredTarget = new THREE.Vector3(
+        simulationData.dangerZone[0],
+        Math.max(0.5, simulationData.waterLevel * 0.6),
+        simulationData.dangerZone[2]
+      );
+      camera.position.lerp(desiredPos, Math.min(1, delta * 3.5));
+      if (controlsRef.current) {
+        controlsRef.current.target.lerp(desiredTarget, Math.min(1, delta * 4));
+        controlsRef.current.update();
+      }
       return;
     }
 
-    const t = Math.min(1, elapsed / duration);
-    const ease = 1 - Math.pow(1 - t, 3);
+    if (transitionFrames.current > 0) {
+      transitionFrames.current -= 1;
+      let targetPos = new THREE.Vector3(0, 17, 25);
+      let lookAtTarget = new THREE.Vector3(0, 1.2, 0);
 
-    const angle = THREE.MathUtils.lerp(startAngleRef.current + 0.65, 0.78, ease);
-    const radius = THREE.MathUtils.lerp(33, 25, ease);
-    const height = THREE.MathUtils.lerp(22, 16.5, ease);
+      if (preset === 'FLOOD_STAIRS') {
+        targetPos = new THREE.Vector3(-6, 7.5, 18.5);
+        lookAtTarget = new THREE.Vector3(-15, 1.8, 10.5);
+      } else if (preset === 'ELEVATOR_ADA') {
+        targetPos = new THREE.Vector3(4.5, 6.8, 9.5);
+        lookAtTarget = new THREE.Vector3(13, 2.4, -2);
+      }
 
-    const desiredPos = new THREE.Vector3(
-      Math.cos(angle) * radius,
-      height,
-      Math.sin(angle) * radius
-    );
-
-    camera.position.lerp(desiredPos, Math.min(1, delta * 4.5));
-
-    if (controlsRef.current) {
-      const targetFocus = new THREE.Vector3(
-        simulation.dangerZone[0] * 0.22,
-        Math.min(2.0, simulation.waterLevel * 0.4 + 0.8),
-        simulation.dangerZone[2] * 0.22
-      );
-      controlsRef.current.target.lerp(targetFocus, Math.min(1, delta * 4.0));
-      controlsRef.current.update();
+      camera.position.lerp(targetPos, Math.min(1, delta * 4.5));
+      if (controlsRef.current) {
+        controlsRef.current.target.lerp(lookAtTarget, Math.min(1, delta * 5.0));
+        controlsRef.current.update();
+      }
     }
   });
 
@@ -251,234 +171,745 @@ function CinematicCameraRig({
 }
 
 /**
- * 여의도역 지하 2층~3층 구조물 (어두운 메탈 타일 바닥/벽면 + 천장 형광등 트러스 + 기둥 젖은 질감)
+ * 3D Subway Train Car parked behind the North Platform Screen Doors (Z = -13.6)
  */
-function SubwayStationArchitecture({ waterLevel }: { waterLevel: number }) {
-  const turnstiles = useMemo(() => [-13, -10.5, -8, -5.5, -3], []);
-  const screenDoors = useMemo(() => [-12, -8, -4, 0, 4, 8, 12], []);
-  const wetMeshRefs = useRef<(THREE.Mesh | null)[]>([]);
-  const emergencyLightRef = useRef<THREE.PointLight>(null);
+function SubwayTrainCar({ status }: { status: SimulationData['status'] }) {
+  const headlightRef = useRef<THREE.MeshStandardMaterial>(null);
 
-  const metalTileTexture = useMemo(() => createMetalTileTexture(), []);
+  useFrame(({ clock }) => {
+    if (headlightRef.current) {
+      const pulse = status === 'DANGER' ? 2.2 + Math.sin(clock.getElapsedTime() * 8) * 0.8 : 2.0;
+      headlightRef.current.emissiveIntensity = pulse;
+    }
+  });
 
-  useFrame((state, delta) => {
-    const wetHeight = Math.max(0.05, Math.min(5.4, waterLevel + 0.35));
-    wetMeshRefs.current.forEach((mesh) => {
-      if (!mesh) return;
-      mesh.scale.y = THREE.MathUtils.lerp(mesh.scale.y, wetHeight, Math.min(1, delta * 3.5));
-      mesh.position.y = mesh.scale.y / 2;
+  return (
+    <group position={[0, 0.2, -13.7]}>
+      {/* Train Track Bed */}
+      <mesh position={[0, -0.15, 0]}>
+        <boxGeometry args={[42, 0.2, 3.2]} />
+        <meshStandardMaterial color="#090d16" roughness={0.9} />
+      </mesh>
+
+      {/* Main Stainless Steel Car Body */}
+      <mesh position={[0, 1.95, 0]} castShadow receiveShadow>
+        <boxGeometry args={[36, 3.3, 2.7]} />
+        <meshPhysicalMaterial
+          color="#cbd5e1"
+          metalness={0.85}
+          roughness={0.22}
+          clearcoat={0.6}
+        />
+      </mesh>
+
+      {/* Metro Line Signature Blue & Cyan Stripe */}
+      <mesh position={[0, 1.75, 1.36]}>
+        <boxGeometry args={[36.05, 0.38, 0.04]} />
+        <meshStandardMaterial
+          color="#0284c7"
+          emissive="#0ea5e9"
+          emissiveIntensity={0.75}
+        />
+      </mesh>
+
+      {/* Illuminated Passenger Cabin Windows */}
+      {[-14, -10.5, -7, -3.5, 0, 3.5, 7, 10.5, 14].map((x, idx) => (
+        <mesh key={idx} position={[x, 2.25, 1.36]}>
+          <boxGeometry args={[2.3, 1.05, 0.05]} />
+          <meshStandardMaterial
+            color="#fef08a"
+            emissive={status === 'DANGER' ? '#38bdf8' : '#fde047'}
+            emissiveIntensity={1.35}
+          />
+        </mesh>
+      ))}
+
+      {/* Train Destination LED Signboard */}
+      <mesh position={[0, 3.25, 1.36]}>
+        <boxGeometry args={[6.5, 0.36, 0.06]} />
+        <meshStandardMaterial
+          color={status === 'DANGER' ? '#ef4444' : '#10b981'}
+          emissive={status === 'DANGER' ? '#ef4444' : '#10b981'}
+          emissiveIntensity={2.2}
+        />
+      </mesh>
+
+      {/* Front & Rear Headlights */}
+      <mesh position={[17.95, 1.4, 0.8]}>
+        <sphereGeometry args={[0.24, 16, 16]} />
+        <meshStandardMaterial
+          ref={headlightRef}
+          color="#ffffff"
+          emissive="#38bdf8"
+          emissiveIntensity={2.5}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * Underground Station Architecture: Reflective Granite Platform, Tactile Paving,
+ * Platform Screen Doors, Pillars with Water Level Gauges, Stairs & Waterproof Elevator #3
+ */
+function SubwayStationArchitecture({
+  waterLevel,
+  status,
+}: {
+  waterLevel: number;
+  status: SimulationData['status'];
+}) {
+  const tileTexture = useSubwayTileTexture();
+
+  const pillarPositions: [number, number, number][] = useMemo(
+    () => [
+      [-12, 3.2, -5.5],
+      [-4, 3.2, -5.5],
+      [4, 3.2, -5.5],
+      [12, 3.2, -5.5],
+      [-12, 3.2, 5.5],
+      [-4, 3.2, 5.5],
+      [4, 3.2, 5.5],
+      [12, 3.2, 5.5],
+    ],
+    []
+  );
+
+  const isWet = waterLevel > 0.1;
+  const beaconRefs = useRef<(THREE.MeshStandardMaterial | null)[]>([]);
+  const floodgateRef = useRef<THREE.Mesh>(null);
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    beaconRefs.current.forEach((mat, idx) => {
+      if (!mat) return;
+      if (status === 'DANGER') {
+        const flash = Math.sin(t * 10 + idx * 1.1) > 0 ? 3.8 : 0.3;
+        mat.emissiveIntensity = flash;
+        mat.color.set('#ef4444');
+        mat.emissive.set('#ef4444');
+      } else if (status === 'WARNING') {
+        const flash = Math.sin(t * 5 + idx) > 0 ? 2.4 : 0.4;
+        mat.emissiveIntensity = flash;
+        mat.color.set('#f59e0b');
+        mat.emissive.set('#f59e0b');
+      } else {
+        mat.emissiveIntensity = 1.0;
+        mat.color.set('#10b981');
+        mat.emissive.set('#10b981');
+      }
     });
 
-    if (emergencyLightRef.current) {
-      emergencyLightRef.current.intensity =
-        2.2 + Math.sin(state.clock.elapsedTime * 8.0) * 1.2;
+    // Smoothly raise the automated floodgate barrier at West Stairwell when water rises
+    if (floodgateRef.current) {
+      const targetGateY = waterLevel > 0.5 ? 0.95 : -0.8;
+      floodgateRef.current.position.y = THREE.MathUtils.lerp(
+        floodgateRef.current.position.y,
+        targetGateY,
+        0.08
+      );
     }
   });
 
   return (
     <group>
-      {/* 비상 적색 경보등 */}
-      <pointLight
-        ref={emergencyLightRef}
-        position={[-10, 5.2, 6]}
-        color="#ff1744"
-        intensity={2.4}
-        distance={25}
-      />
-
-      {/* 어두운 메탈 타일 그리드 재질 바닥 */}
+      {/* Main Concourse & Platform Floor */}
       <mesh position={[0, -0.25, 0]} receiveShadow>
-        <boxGeometry args={[38, 0.5, 30]} />
-        <meshStandardMaterial
-          map={metalTileTexture}
-          color="#cbd5e1"
-          roughness={0.28}
-          metalness={0.68}
+        <boxGeometry args={[42, 0.5, 28]} />
+        <meshPhysicalMaterial
+          map={tileTexture ?? undefined}
+          color={isWet ? '#1e293b' : '#334155'}
+          roughness={isWet ? 0.08 : 0.35}
+          metalness={isWet ? 0.65 : 0.25}
+          clearcoat={1.0}
+          clearcoatRoughness={isWet ? 0.05 : 0.25}
         />
       </mesh>
 
-      {/* 지하철역 천장 철골 트러스 & 비상 형광등 라인 (입체감 및 수면 반사광원 역할) */}
-      {[-8, 0, 8].map((zPos, idx) => (
-        <group key={`ceiling-beam-${idx}`} position={[0, 5.75, zPos]}>
-          <mesh>
-            <boxGeometry args={[36, 0.18, 0.45]} />
-            <meshStandardMaterial color="#1e293b" metalness={0.8} roughness={0.25} />
+      {/* High-Visibility Yellow Tactile Paving (점자블록) along Platform Edge & ADA Corridor */}
+      <mesh position={[0, 0.02, -10.8]} receiveShadow>
+        <boxGeometry args={[38, 0.03, 0.45]} />
+        <meshStandardMaterial
+          color="#facc15"
+          emissive="#ca8a04"
+          emissiveIntensity={0.45}
+          roughness={0.4}
+        />
+      </mesh>
+      <mesh position={[3, 0.02, -2]} receiveShadow>
+        <boxGeometry args={[20, 0.03, 0.38]} />
+        <meshStandardMaterial
+          color="#facc15"
+          emissive="#ca8a04"
+          emissiveIntensity={0.5}
+          roughness={0.4}
+        />
+      </mesh>
+
+      {/* Subway Train Parked Behind PSD */}
+      <SubwayTrainCar status={status} />
+
+      {/* North Platform Screen Doors (PSD) along Z = -11.8 */}
+      <group position={[0, 2.2, -11.8]}>
+        <mesh receiveShadow castShadow>
+          <boxGeometry args={[42, 4.4, 0.28]} />
+          <meshPhysicalMaterial
+            color="#38bdf8"
+            transparent
+            opacity={0.28}
+            roughness={0.08}
+            metalness={0.5}
+            transmission={0.55}
+          />
+        </mesh>
+        {/* Top Metallic Header Beam */}
+        <mesh position={[0, 2.0, 0.06]}>
+          <boxGeometry args={[42, 0.5, 0.42]} />
+          <meshStandardMaterial color="#0f172a" metalness={0.85} roughness={0.2} />
+        </mesh>
+        {/* PSD Emergency LED Strip */}
+        <mesh position={[0, 1.72, 0.28]}>
+          <boxGeometry args={[40, 0.1, 0.05]} />
+          <meshStandardMaterial
+            color={status === 'DANGER' ? '#ef4444' : '#38bdf8'}
+            emissive={status === 'DANGER' ? '#ef4444' : '#38bdf8'}
+            emissiveIntensity={2.2}
+          />
+        </mesh>
+        {/* Vertical PSD Door Pillars & Station Name Signs */}
+        {[-16, -12, -8, -4, 0, 4, 8, 12, 16].map((x) => (
+          <group key={x} position={[x, 0, 0.05]}>
+            <mesh>
+              <boxGeometry args={[0.38, 4.4, 0.38]} />
+              <meshStandardMaterial color="#1e293b" metalness={0.8} roughness={0.25} />
+            </mesh>
+            {x % 8 === 0 && (
+              <mesh position={[0, 1.2, 0.21]}>
+                <boxGeometry args={[1.6, 0.32, 0.04]} />
+                <meshStandardMaterial
+                  color="#0284c7"
+                  emissive="#0284c7"
+                  emissiveIntensity={1.1}
+                />
+              </mesh>
+            )}
+          </group>
+        ))}
+      </group>
+
+      {/* Central Automated Fare Gates (개찰구 - Emergency Free-Pass Open Mode) */}
+      <group position={[0, 0.55, 1.5]}>
+        {[-5, -3, -1, 1, 3, 5].map((x) => (
+          <group key={x} position={[x, 0, 0]}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[0.45, 1.1, 1.65]} />
+              <meshPhysicalMaterial
+                color="#475569"
+                metalness={0.85}
+                roughness={0.18}
+                clearcoat={0.8}
+              />
+            </mesh>
+            {/* Top Scanner LED Indicator (Green Free-Pass) */}
+            <mesh position={[0, 0.57, 0]}>
+              <boxGeometry args={[0.38, 0.05, 1.5]} />
+              <meshStandardMaterial
+                color="#10b981"
+                emissive="#10b981"
+                emissiveIntensity={2.4}
+              />
+            </mesh>
+          </group>
+        ))}
+      </group>
+
+      {/* 8 Structural Columns with Wet Specular Bases, Water Depth Markers & Emergency Strobes */}
+      {pillarPositions.map(([x, y, z], idx) => (
+        <group key={idx} position={[x, y, z]}>
+          {/* Upper Column Body */}
+          <mesh castShadow receiveShadow>
+            <boxGeometry args={[1.35, 6.4, 1.35]} />
+            <meshPhysicalMaterial
+              color="#334155"
+              roughness={0.28}
+              metalness={0.55}
+              clearcoat={0.7}
+            />
           </mesh>
-          <mesh position={[0, -0.11, 0]}>
-            <boxGeometry args={[32, 0.04, 0.16]} />
+
+          {/* Wet Glossy Lower Sleeve */}
+          <mesh position={[0, -1.6, 0]}>
+            <boxGeometry args={[1.39, 3.2, 1.39]} />
+            <meshPhysicalMaterial
+              color="#0f172a"
+              roughness={0.03}
+              metalness={0.9}
+              clearcoat={1.0}
+              clearcoatRoughness={0.02}
+            />
+          </mesh>
+
+          {/* Glowing Cyan Safety Band */}
+          <mesh position={[0, -0.3, 0]}>
+            <boxGeometry args={[1.42, 0.16, 1.42]} />
             <meshStandardMaterial
-              color="#e0f2fe"
-              emissive="#38bdf8"
+              color="#38bdf8"
+              emissive="#0284c7"
               emissiveIntensity={1.6}
             />
           </mesh>
-        </group>
-      ))}
 
-      {/* 시각장애인/대피 유도 점자 블록 라인 */}
-      <mesh position={[0, 0.03, -8.5]} receiveShadow>
-        <boxGeometry args={[34, 0.03, 0.45]} />
-        <meshStandardMaterial color="#facc15" emissive="#eab308" emissiveIntensity={0.75} />
-      </mesh>
-
-      {/* 외벽 메탈 타일 구조 프레임 */}
-      <mesh position={[0, 3, -14.8]} receiveShadow>
-        <boxGeometry args={[38, 6, 0.4]} />
-        <meshStandardMaterial
-          map={metalTileTexture}
-          color="#64748b"
-          transparent
-          opacity={0.75}
-          roughness={0.35}
-          metalness={0.6}
-        />
-      </mesh>
-      <mesh position={[-18.8, 3, 0]} receiveShadow>
-        <boxGeometry args={[0.4, 6, 30]} />
-        <meshStandardMaterial
-          map={metalTileTexture}
-          color="#475569"
-          transparent
-          opacity={0.45}
-          roughness={0.35}
-          metalness={0.6}
-        />
-      </mesh>
-      <mesh position={[18.8, 3, 0]} receiveShadow>
-        <boxGeometry args={[0.4, 6, 30]} />
-        <meshStandardMaterial
-          map={metalTileTexture}
-          color="#475569"
-          transparent
-          opacity={0.45}
-          roughness={0.35}
-          metalness={0.6}
-        />
-      </mesh>
-
-      {/* 기둥 그리드 (상단 브러시드 메탈/콘크리트 + 하단 젖은 고반사 Specular 레이어 + 코너 수직 LED) */}
-      {PILLAR_COORDS.map(([px, pz], idx) => (
-        <group key={`pillar-${idx}`} position={[px, 0, pz]}>
-          {/* 상단 기본 기둥 */}
-          <mesh position={[0, 2.85, 0]} castShadow receiveShadow>
-            <boxGeometry args={[1.15, 5.7, 1.15]} />
-            <meshStandardMaterial color="#334155" roughness={0.45} metalness={0.45} />
-          </mesh>
-
-          {/* 물에 잠긴 하단부 젖은 질감 (Specular & Clearcoat 반사) */}
-          <mesh
-            ref={(el) => {
-              wetMeshRefs.current[idx] = el;
-            }}
-            position={[0, 0.5, 0]}
-            castShadow
-            receiveShadow
-          >
-            <boxGeometry args={[1.19, 1, 1.19]} />
-            <meshPhysicalMaterial
-              color="#0f172a"
-              roughness={0.05}
-              metalness={0.78}
-              clearcoat={1.0}
-              clearcoatRoughness={0.04}
-              reflectivity={0.98}
-            />
-          </mesh>
-
-          {/* 여의도역 5·9호선 안내 네온 띠 */}
-          <mesh position={[0, 3.9, 0]}>
-            <boxGeometry args={[1.22, 0.28, 1.22]} />
+          {/* Emergency Strobe Beacon */}
+          <mesh position={[0, 2.75, 0]}>
+            <sphereGeometry args={[0.24, 16, 16]} />
             <meshStandardMaterial
-              color="#38bdf8"
-              emissive="#00d2ff"
-              emissiveIntensity={2.0}
-            />
-          </mesh>
-
-          {/* 기둥 수직 엣지 가이드 라이트 바 */}
-          <mesh position={[0.59, 2.8, 0.59]}>
-            <boxGeometry args={[0.05, 5.4, 0.05]} />
-            <meshStandardMaterial
-              color="#38bdf8"
-              emissive="#0284c7"
-              emissiveIntensity={1.2}
-            />
-          </mesh>
-          <mesh position={[-0.59, 2.8, 0.59]}>
-            <boxGeometry args={[0.05, 5.4, 0.05]} />
-            <meshStandardMaterial
-              color="#38bdf8"
-              emissive="#0284c7"
-              emissiveIntensity={1.2}
-            />
-          </mesh>
-
-          {/* 비상 적색 경보 비콘 */}
-          <mesh position={[0, 4.45, 0.6]}>
-            <boxGeometry args={[0.4, 0.14, 0.06]} />
-            <meshStandardMaterial
-              color="#ff2a5f"
-              emissive="#ff0044"
+              ref={(el) => {
+                beaconRefs.current[idx] = el;
+              }}
+              color="#ef4444"
+              emissive="#ef4444"
               emissiveIntensity={2.5}
             />
           </mesh>
         </group>
       ))}
 
-      {/* 북측 지하철 스크린도어 (PSD) */}
-      <group position={[0, 0, -11.5]}>
-        <mesh position={[0, 3.3, 0]} castShadow>
-          <boxGeometry args={[34, 0.6, 0.35]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.85} roughness={0.2} />
-        </mesh>
-        {screenDoors.map((sx, i) => (
-          <group key={`psd-${i}`} position={[sx, 1.5, 0]}>
-            <mesh>
-              <boxGeometry args={[3.4, 3.0, 0.12]} />
-              <meshPhysicalMaterial
-                color="#7dd3fc"
-                transparent
-                opacity={0.28}
-                roughness={0.08}
-                metalness={0.15}
-                transmission={0.6}
-              />
-            </mesh>
-            <mesh position={[1.8, 0, 0]} castShadow>
-              <boxGeometry args={[0.25, 3.1, 0.25]} />
-              <meshStandardMaterial color="#334155" metalness={0.75} roughness={0.25} />
-            </mesh>
-            <mesh position={[0, 1.4, 0.1]}>
-              <boxGeometry args={[1.3, 0.1, 0.05]} />
-              <meshStandardMaterial color="#ff2a5f" emissive="#ff0044" emissiveIntensity={2.2} />
-            </mesh>
-          </group>
+      {/* Overhead Industrial Ceiling Trusses & High-Output Fluorescent Strips */}
+      {[-9, -3, 3, 9].map((z, idx) => (
+        <group key={idx} position={[0, 6.35, z]}>
+          <mesh>
+            <boxGeometry args={[40, 0.22, 0.35]} />
+            <meshStandardMaterial color="#1e293b" metalness={0.85} roughness={0.25} />
+          </mesh>
+          <mesh position={[0, -0.14, 0]}>
+            <boxGeometry args={[36, 0.06, 0.16]} />
+            <meshStandardMaterial
+              color="#e0f2fe"
+              emissive={status === 'DANGER' ? '#7dd3fc' : '#f8fafc'}
+              emissiveIntensity={1.8}
+            />
+          </mesh>
+        </group>
+      ))}
+
+      {/* WEST STAIRWELL (Exit #1 - Flooded Low-Ground Hazard Zone) */}
+      <group position={[-15, 0, 11]}>
+        {Array.from({ length: 12 }).map((_, i) => (
+          <mesh
+            key={i}
+            position={[-i * 0.42, i * 0.3 + 0.15, 0]}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[0.48, 0.3, 3.6]} />
+            <meshPhysicalMaterial
+              color={waterLevel > i * 0.3 ? '#1e3a8a' : '#475569'}
+              roughness={0.12}
+              metalness={0.65}
+              clearcoat={1.0}
+            />
+          </mesh>
         ))}
+
+        {/* Automated Rising Floodgate Barrier (차수판) at Base of West Stairs */}
+        <mesh ref={floodgateRef} position={[0.45, 0.8, 0]} castShadow>
+          <boxGeometry args={[0.18, 1.7, 3.8]} />
+          <meshPhysicalMaterial
+            color="#dc2626"
+            emissive="#991b1b"
+            emissiveIntensity={0.8}
+            metalness={0.7}
+            roughness={0.2}
+          />
+        </mesh>
+
+        <Html position={[-2.2, 4.5, 0]} center distanceFactor={22}>
+          <div className="px-2.5 py-1 rounded-md bg-red-950/90 border border-red-500/80 text-[11px] font-mono text-red-200 whitespace-nowrap shadow-[0_0_20px_rgba(239,68,68,0.6)] flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+            1번 출구 계단 (폭우 폭포수 유입 · 차수판 가동)
+          </div>
+        </Html>
       </group>
 
-      {/* 서남측 지하철 개찰구 (Turnstile Gates) */}
-      <group position={[0, 0, 6]}>
-        {turnstiles.map((tx, i) => (
-          <group key={`turnstile-${i}`} position={[tx, 0.6, 0]}>
-            <mesh castShadow receiveShadow>
-              <boxGeometry args={[0.5, 1.2, 1.85]} />
-              <meshStandardMaterial color="#475569" metalness={0.85} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, 0.63, 0.6]}>
-              <boxGeometry args={[0.38, 0.06, 0.38]} />
+      {/* EAST STAIRWELL (Exit #4 - High-Ground Safe Evacuation Route) */}
+      <group position={[15, 0, -10]}>
+        {Array.from({ length: 12 }).map((_, i) => (
+          <mesh
+            key={i}
+            position={[i * 0.42, i * 0.3 + 0.15, 0]}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[0.48, 0.3, 3.6]} />
+            <meshStandardMaterial
+              color="#065f46"
+              emissive="#059669"
+              emissiveIntensity={0.65}
+              roughness={0.25}
+              metalness={0.4}
+            />
+          </mesh>
+        ))}
+        {/* Illuminated Green Exit Portal Arch */}
+        <mesh position={[4.8, 4.6, 0]}>
+          <boxGeometry args={[0.3, 2.2, 3.8]} />
+          <meshStandardMaterial
+            color="#10b981"
+            emissive="#10b981"
+            emissiveIntensity={1.8}
+            transparent
+            opacity={0.45}
+          />
+        </mesh>
+        <Html position={[2.6, 4.6, 0]} center distanceFactor={22}>
+          <div className="px-2.5 py-1 rounded-md bg-emerald-950/90 border border-emerald-400/80 text-[11px] font-mono text-emerald-200 whitespace-nowrap shadow-[0_0_20px_rgba(16,185,129,0.6)]">
+            ✓ 4번 출구 고지대 비상계단 (일반 승객 106명 대피)
+          </div>
+        </Html>
+      </group>
+
+      {/* WATERPROOF ELEVATOR #3 SHAFT (East Concourse [13, 0, -2]) */}
+      <group position={[13, 3.2, -2]}>
+        {/* Reinforced Waterproof Glass Shaft */}
+        <mesh castShadow receiveShadow>
+          <boxGeometry args={[2.7, 6.4, 2.7]} />
+          <meshPhysicalMaterial
+            color="#fef08a"
+            emissive="#eab308"
+            emissiveIntensity={0.25}
+            transparent
+            opacity={0.24}
+            roughness={0.08}
+            metalness={0.6}
+            transmission={0.6}
+          />
+        </mesh>
+        {/* Corner Steel Structural Frame */}
+        {[
+          [-1.32, -1.32],
+          [1.32, -1.32],
+          [-1.32, 1.32],
+          [1.32, 1.32],
+        ].map(([cx, cz], i) => (
+          <mesh key={i} position={[cx, 0, cz]}>
+            <boxGeometry args={[0.14, 6.4, 0.14]} />
+            <meshStandardMaterial
+              color="#facc15"
+              emissive="#ca8a04"
+              emissiveIntensity={0.9}
+              metalness={0.8}
+            />
+          </mesh>
+        ))}
+        <Html position={[0, 3.8, 0]} center distanceFactor={22}>
+          <div className="px-2.5 py-1 rounded-md bg-yellow-950/95 border border-yellow-400 text-[11px] font-mono text-yellow-200 whitespace-nowrap shadow-[0_0_20px_rgba(250,204,21,0.6)]">
+            ♿ 방수 엘리베이터 #3 (IP68 수밀 · 교통약자 14명 전용)
+          </div>
+        </Html>
+      </group>
+    </group>
+  );
+}
+
+/**
+ * Cascading Stairwell Waterfall Particles pouring down the flooded West Exit #1 Stairs
+ */
+function StairwellWaterfall({ waterLevel }: { waterLevel: number }) {
+  const pointsRef = useRef<THREE.Points>(null);
+  const count = 360;
+
+  const { positions, speeds } = useMemo(() => {
+    const pos = new Float32Array(count * 3);
+    const spd = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const progress = Math.random(); // 0 = top of stairs, 1 = bottom splash
+      pos[i * 3] = -19.8 + progress * 5.2;
+      pos[i * 3 + 1] = (1 - progress) * 3.8 + Math.random() * 0.25;
+      pos[i * 3 + 2] = 11 + (Math.random() - 0.5) * 3.1;
+      spd[i] = 0.45 + Math.random() * 0.35;
+    }
+    return { positions: pos, speeds: spd };
+  }, []);
+
+  useFrame((_, delta) => {
+    if (!pointsRef.current) return;
+    const attr = pointsRef.current.geometry.attributes.position as THREE.BufferAttribute;
+    const arr = attr.array as Float32Array;
+
+    for (let i = 0; i < count; i++) {
+      // Move down the stairs (+X, -Y)
+      arr[i * 3] += speeds[i] * delta * 6.5;
+      arr[i * 3 + 1] -= speeds[i] * delta * 4.6;
+
+      // Reset to top of stairwell when hitting water or bottom
+      if (arr[i * 3] > -14.2 || arr[i * 3 + 1] < Math.max(0.15, waterLevel)) {
+        arr[i * 3] = -19.8 + Math.random() * 0.6;
+        arr[i * 3 + 1] = 3.6 + Math.random() * 0.35;
+        arr[i * 3 + 2] = 11 + (Math.random() - 0.5) * 3.1;
+      }
+    }
+    attr.needsUpdate = true;
+  });
+
+  if (waterLevel <= 0.15) return null;
+
+  return (
+    <points ref={pointsRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          count={count}
+          array={positions}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <pointsMaterial
+        color="#bae6fd"
+        size={0.22}
+        transparent
+        opacity={0.85}
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </points>
+  );
+}
+
+/**
+ * Realistic Floodwater System: Zero Z-fighting volumetric water body,
+ * vertex-displaced wave surface, and swirling white foam rings around pillars.
+ */
+function FloodWaterSystem({ targetWaterLevel }: { targetWaterLevel: number }) {
+  const surfaceMeshRef = useRef<THREE.Mesh>(null);
+  const volumeMeshRef = useRef<THREE.Mesh>(null);
+  const foamGroupRef = useRef<THREE.Group>(null);
+  const currentLevelRef = useRef(0.1);
+
+  const surfaceGeo = useMemo(() => {
+    const geo = new THREE.PlaneGeometry(42, 28, 72, 52);
+    geo.rotateX(-Math.PI / 2);
+    return geo;
+  }, []);
+
+  const basePositions = useMemo(() => {
+    const pos = surfaceGeo.attributes.position.array as Float32Array;
+    return new Float32Array(pos);
+  }, [surfaceGeo]);
+
+  const foamGeometry = useMemo(() => {
+    const pillars: [number, number][] = [
+      [-12, -5.5],
+      [-4, -5.5],
+      [4, -5.5],
+      [12, -5.5],
+      [-12, 5.5],
+      [-4, 5.5],
+      [4, 5.5],
+      [12, 5.5],
+    ];
+    const pts: number[] = [];
+    pillars.forEach(([px, pz]) => {
+      for (let i = 0; i < 42; i++) {
+        const angle = (i / 42) * Math.PI * 2;
+        const r = 0.92 + Math.random() * 0.42;
+        pts.push(px + Math.cos(angle) * r, (Math.random() - 0.5) * 0.05, pz + Math.sin(angle) * r);
+      }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    return geo;
+  }, []);
+
+  useFrame(({ clock }, delta) => {
+    const t = clock.getElapsedTime();
+    currentLevelRef.current = THREE.MathUtils.lerp(
+      currentLevelRef.current,
+      targetWaterLevel,
+      Math.min(1, delta * 2.4)
+    );
+    const h = currentLevelRef.current;
+
+    if (surfaceMeshRef.current) {
+      surfaceMeshRef.current.position.y = h;
+      surfaceMeshRef.current.visible = h > 0.03;
+
+      const posAttr = surfaceGeo.attributes.position as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      for (let i = 0; i < posAttr.count; i++) {
+        const bx = basePositions[i * 3];
+        const bz = basePositions[i * 3 + 2];
+        const wave1 = Math.sin(bx * 0.5 + t * 2.8) * 0.055;
+        const wave2 = Math.cos(bz * 0.65 + t * 2.3) * 0.055;
+        const ripple = Math.sin((bx - bz) * 1.1 + t * 4.5) * 0.02;
+        arr[i * 3 + 1] = wave1 + wave2 + ripple;
+      }
+      posAttr.needsUpdate = true;
+      surfaceGeo.computeVertexNormals();
+    }
+
+    // Keep volume box strictly 0.24m below wave surface to completely prevent Z-fighting
+    if (volumeMeshRef.current) {
+      const safeVolHeight = Math.max(0.02, h - 0.24);
+      volumeMeshRef.current.scale.y = safeVolHeight;
+      volumeMeshRef.current.position.y = safeVolHeight / 2;
+      volumeMeshRef.current.visible = h > 0.32;
+    }
+
+    if (foamGroupRef.current) {
+      foamGroupRef.current.position.y = h + 0.07;
+      foamGroupRef.current.visible = h > 0.12;
+      foamGroupRef.current.position.x = Math.sin(t * 3.2) * 0.04;
+      foamGroupRef.current.position.z = Math.cos(t * 2.7) * 0.04;
+    }
+  });
+
+  return (
+    <group>
+      {/* Top Animated Wave Surface */}
+      <mesh ref={surfaceMeshRef} geometry={surfaceGeo} receiveShadow>
+        <meshPhysicalMaterial
+          color="#0284c7"
+          emissive="#0369a1"
+          emissiveIntensity={0.28}
+          transparent
+          opacity={0.78}
+          roughness={0.06}
+          metalness={0.15}
+          transmission={0.74}
+          thickness={2.4}
+          ior={1.333}
+          clearcoat={1.0}
+          clearcoatRoughness={0.04}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* Lower Submerged Water Volume */}
+      <mesh ref={volumeMeshRef} position={[0, 0.05, 0]}>
+        <boxGeometry args={[41.8, 1, 27.8]} />
+        <meshStandardMaterial
+          color="#082f49"
+          emissive="#0c4a6e"
+          emissiveIntensity={0.2}
+          transparent
+          opacity={0.48}
+          depthWrite={false}
+        />
+      </mesh>
+
+      {/* Swirling White Foam Particles Around Pillars */}
+      <group ref={foamGroupRef}>
+        <points geometry={foamGeometry}>
+          <pointsMaterial
+            color="#f0f9ff"
+            size={0.17}
+            transparent
+            opacity={0.9}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+          />
+        </points>
+      </group>
+    </group>
+  );
+}
+
+/**
+ * Animated 3D Evacuating Commuters, Wheelchair Agent, and Moving Glass Elevator Cab
+ */
+function EvacuationAgentsAndElevator({
+  evacuationPath,
+  vulnerablePath,
+  waterLevel,
+}: {
+  evacuationPath: [number, number, number][];
+  vulnerablePath: [number, number, number][];
+  waterLevel: number;
+}) {
+  const generalAgentsRef = useRef<THREE.Group>(null);
+  const wheelchairAgentsRef = useRef<THREE.Group>(null);
+  const elevatorCabRef = useRef<THREE.Group>(null);
+
+  const generalCurve = useMemo(() => {
+    const pts = (evacuationPath.length >= 2
+      ? evacuationPath
+      : [
+          [-9, 0.4, 6],
+          [15, 0.5, -10],
+          [19.2, 3.8, -10],
+        ]
+    ).map(([x, y, z]) => new THREE.Vector3(x, Math.max(y, waterLevel * 0.25 + 0.2), z));
+    return new THREE.CatmullRomCurve3(pts);
+  }, [evacuationPath, waterLevel]);
+
+  const vulnerableCurve = useMemo(() => {
+    // Ground segment leading into Waterproof Elevator #3 ([13, 0.4, -2])
+    const groundPts = (vulnerablePath.length >= 2
+      ? vulnerablePath.slice(0, -1)
+      : [
+          [-7, 0.4, 4],
+          [13, 0.4, -2],
+        ]
+    ).map(([x, y, z]) => new THREE.Vector3(x, Math.max(y, 0.25), z));
+    if (groundPts.length < 2) {
+      groundPts.push(new THREE.Vector3(13, 0.4, -2));
+    }
+    return new THREE.CatmullRomCurve3(groundPts);
+  }, [vulnerablePath]);
+
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+
+    // Animate 8 general evacuees walking/running along Neon Green path
+    if (generalAgentsRef.current) {
+      generalAgentsRef.current.children.forEach((child, idx) => {
+        const u = (t * 0.14 + idx / 8) % 1;
+        const pos = generalCurve.getPointAt(u);
+        const tangent = generalCurve.getTangentAt(u);
+        child.position.set(pos.x, pos.y + Math.abs(Math.sin(t * 9 + idx)) * 0.08, pos.z);
+        child.rotation.y = Math.atan2(tangent.x, tangent.z);
+      });
+    }
+
+    // Animate 3 wheelchair/assisted evacuees moving along Neon Yellow path
+    if (wheelchairAgentsRef.current) {
+      wheelchairAgentsRef.current.children.forEach((child, idx) => {
+        const u = (t * 0.11 + idx / 3) % 1;
+        const pos = vulnerableCurve.getPointAt(u);
+        const tangent = vulnerableCurve.getTangentAt(u);
+        child.position.set(pos.x, pos.y, pos.z);
+        child.rotation.y = Math.atan2(tangent.x, tangent.z);
+      });
+    }
+
+    // Animate Waterproof Elevator #3 Cab ascending from platform (Y=0.8) to surface exit (Y=5.4)
+    if (elevatorCabRef.current) {
+      const cycle = (Math.sin(t * 1.1) + 1) * 0.5; // 0..1 smooth elevator cycle
+      elevatorCabRef.current.position.y = 0.9 + cycle * 4.4;
+    }
+  });
+
+  return (
+    <group>
+      {/* 8 General Evacuee Commuter Avatars */}
+      <group ref={generalAgentsRef}>
+        {Array.from({ length: 8 }).map((_, idx) => (
+          <group key={idx}>
+            {/* Torso with High-Vis Green Rescue Aura */}
+            <mesh position={[0, 0.55, 0]} castShadow>
+              <cylinderGeometry args={[0.18, 0.22, 0.75, 12]} />
               <meshStandardMaterial
-                color="#00ff9d"
-                emissive="#00ff9d"
-                emissiveIntensity={2.2}
+                color="#10b981"
+                emissive="#059669"
+                emissiveIntensity={1.5}
               />
             </mesh>
-            <mesh position={[1.1, 0, 0]}>
-              <boxGeometry args={[1.5, 0.9, 0.06]} />
+            {/* Head */}
+            <mesh position={[0, 1.12, 0]}>
+              <sphereGeometry args={[0.16, 12, 12]} />
               <meshStandardMaterial
-                color="#ff2a5f"
-                transparent
-                opacity={0.55}
-                emissive="#ff2a5f"
+                color="#ecfdf5"
+                emissive="#34d399"
                 emissiveIntensity={1.2}
               />
             </mesh>
@@ -486,491 +917,270 @@ function SubwayStationArchitecture({ waterLevel }: { waterLevel: number }) {
         ))}
       </group>
 
-      {/* 동측 교통약자 방수 엘리베이터 타워 */}
-      <group position={[13, 0, -2]}>
-        <mesh position={[0, 2.8, 0]}>
-          <boxGeometry args={[2.8, 5.6, 2.8]} />
-          <meshPhysicalMaterial
-            color="#fde047"
-            transparent
-            opacity={0.24}
-            roughness={0.1}
-            metalness={0.25}
-          />
-        </mesh>
-        <mesh position={[0, 5.65, 0]}>
-          <boxGeometry args={[3.1, 0.3, 3.1]} />
-          <meshStandardMaterial
-            color="#facc15"
-            emissive="#eab308"
-            emissiveIntensity={1.8}
-          />
-        </mesh>
-        <pointLight position={[0, 4.5, 0]} color="#fde047" intensity={3.0} distance={12} />
-        <Html position={[0, 6.3, 0]} center distanceFactor={28}>
-          <div className="px-2.5 py-0.5 rounded bg-amber-400 text-slate-950 font-mono font-extrabold text-[10px] whitespace-nowrap shadow-[0_0_18px_rgba(251,191,36,0.9)] border border-white">
-            ♿ 방수 엘리베이터 #3 (가동중)
-          </div>
-        </Html>
-      </group>
-
-      {/* 동남측 고지대 비상탈출 계단 */}
-      <group position={[16, 0, 10]}>
-        <mesh position={[0, 2.2, 0]} rotation={[-0.45, 0, 0]} castShadow receiveShadow>
-          <boxGeometry args={[3.2, 0.4, 7.5]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.6} roughness={0.35} />
-        </mesh>
-        <pointLight position={[0, 4.5, 1]} color="#00ff9d" intensity={3.2} distance={12} />
-        <Html position={[0, 5.1, 1.5]} center distanceFactor={28}>
-          <div className="px-2.5 py-0.5 rounded bg-emerald-400 text-slate-950 font-mono font-extrabold text-[10px] whitespace-nowrap shadow-[0_0_18px_rgba(16,185,129,0.9)] border border-white">
-            🏃 지상 비상출구 (Exit 2)
-          </div>
-        </Html>
-      </group>
-
-      {/* 서남측 일반 출구 계단 */}
-      <group position={[-15, 0, 11]}>
-        <mesh position={[0, 2.0, 0]} rotation={[-0.45, 0, 0]} castShadow receiveShadow>
-          <boxGeometry args={[3.2, 0.4, 7.0]} />
-          <meshStandardMaterial color="#1e293b" metalness={0.6} roughness={0.35} />
-        </mesh>
-        <Html position={[0, 4.8, 1]} center distanceFactor={28}>
-          <div className="px-2 py-0.5 rounded bg-cyan-400 text-slate-950 font-mono font-extrabold text-[10px] whitespace-nowrap shadow-lg border border-white">
-            서측 출구 (Exit 1)
-          </div>
-        </Html>
-      </group>
-    </group>
-  );
-}
-
-/**
- * 2. 물(Water) 물리 표현:
- * - Z-fighting(검은 얼룩 클리핑) 완벽 제거!
- * - roughness: 0.1, metalness: 0.1, transmission: 0.6 적용된 MeshPhysicalMaterial
- * - useFrame 내 sin(clock.getElapsedTime()) 파도 정점 애니메이션 + 기둥 주변 하얀 포말(Foam)
- */
-function RisingWaterAndFoam({ targetWaterLevel }: { targetWaterLevel: number }) {
-  const waterSurfaceRef = useRef<THREE.Mesh>(null);
-  const waterUnderVolumeRef = useRef<THREE.Mesh>(null);
-  const foamGroupRef = useRef<THREE.Group>(null);
-  const foamParticlesRef = useRef<THREE.Points>(null);
-  const currentHeightRef = useRef<number>(0.2);
-
-  const causticsTexture = useMemo(() => createWaterCausticsTexture(), []);
-
-  // 고밀도 파도 평면 지오메트리
-  const surfaceGeometry = useMemo(() => {
-    const geom = new THREE.PlaneGeometry(37.6, 29.6, 56, 44);
-    geom.rotateX(-Math.PI / 2);
-    return geom;
-  }, []);
-
-  // 기둥 주변 하얀 포말 파티클
-  const { foamPositions, foamAngles, foamRadii, foamPillarIndices } = useMemo(() => {
-    const countPerPillar = 32;
-    const total = PILLAR_COORDS.length * countPerPillar;
-    const positions = new Float32Array(total * 3);
-    const angles = new Float32Array(total);
-    const radii = new Float32Array(total);
-    const pillarIndices = new Uint16Array(total);
-
-    let ptr = 0;
-    PILLAR_COORDS.forEach(([px, pz], pIdx) => {
-      for (let i = 0; i < countPerPillar; i++) {
-        const angle = (i / countPerPillar) * Math.PI * 2 + (i % 3) * 0.2;
-        const r = 0.82 + (i % 5) * 0.16;
-        positions[ptr * 3] = px + Math.cos(angle) * r;
-        positions[ptr * 3 + 1] = 0.1;
-        positions[ptr * 3 + 2] = pz + Math.sin(angle) * r;
-        angles[ptr] = angle;
-        radii[ptr] = r;
-        pillarIndices[ptr] = pIdx;
-        ptr++;
-      }
-    });
-
-    return {
-      foamPositions: positions,
-      foamAngles: angles,
-      foamRadii: radii,
-      foamPillarIndices: pillarIndices,
-    };
-  }, []);
-
-  useFrame((state, delta) => {
-    const elapsed = state.clock.getElapsedTime();
-    const safeTarget = Math.max(0.08, Math.min(5.0, targetWaterLevel));
-
-    // 수위 부드러운 Lerp 상승
-    currentHeightRef.current = THREE.MathUtils.lerp(
-      currentHeightRef.current,
-      safeTarget,
-      Math.min(1, delta * 2.4)
-    );
-    const h = currentHeightRef.current;
-
-    // 코어스틱 물결 텍스처 스크롤
-    causticsTexture.offset.x = elapsed * 0.06;
-    causticsTexture.offset.y = Math.sin(elapsed * 0.4) * 0.08;
-
-    // 1. 수면 파도 애니메이션 (sin(clock.getElapsedTime()) 활용)
-    if (waterSurfaceRef.current) {
-      const waveBase = Math.sin(elapsed * 2.2) * 0.04;
-      waterSurfaceRef.current.position.y = h + waveBase;
-
-      const posAttr = surfaceGeometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < posAttr.count; i++) {
-        const vx = posAttr.getX(i);
-        const vz = posAttr.getZ(i);
-        const wave1 = Math.sin(vx * 0.45 + elapsed * 2.6) * 0.065;
-        const wave2 = Math.cos(vz * 0.55 - elapsed * 2.1) * 0.055;
-        const ripple = Math.sin((vx + vz) * 0.35 + elapsed * 3.4) * 0.03;
-        posAttr.setY(i, wave1 + wave2 + ripple);
-      }
-      posAttr.needsUpdate = true;
-      surfaceGeometry.computeVertexNormals();
-    }
-
-    // 2. 수면 아래 깊은 물 볼륨 (파도 최저점보다 0.22m 낮게 유지하여 Z-fighting 원천 차단!)
-    if (waterUnderVolumeRef.current) {
-      const bodyHeight = Math.max(0.02, h - 0.22);
-      waterUnderVolumeRef.current.visible = h > 0.28;
-      waterUnderVolumeRef.current.scale.y = bodyHeight;
-      waterUnderVolumeRef.current.position.y = bodyHeight / 2;
-    }
-
-    // 3. 기둥 주변 하얀 포말 링 동기화
-    if (foamGroupRef.current) {
-      foamGroupRef.current.position.y = h + 0.09;
-      foamGroupRef.current.children.forEach((child, idx) => {
-        const s = 1.02 + Math.sin(elapsed * 3.5 + idx) * 0.1;
-        child.scale.set(s, s, 1);
-      });
-    }
-
-    // 4. 기둥 주변 하얀 포말 입자 회전
-    if (foamParticlesRef.current) {
-      const pAttr = foamParticlesRef.current.geometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < foamAngles.length; i++) {
-        const pIdx = foamPillarIndices[i];
-        const [px, pz] = PILLAR_COORDS[pIdx];
-        const a = foamAngles[i] + elapsed * (0.75 + (i % 3) * 0.25);
-        const r = foamRadii[i] + Math.sin(elapsed * 4.2 + i) * 0.09;
-        const bobY = h + 0.11 + Math.sin(elapsed * 5.5 + i * 0.7) * 0.04;
-        pAttr.setXYZ(i, px + Math.cos(a) * r, bobY, pz + Math.sin(a) * r);
-      }
-      pAttr.needsUpdate = true;
-    }
-  });
-
-  return (
-    <group>
-      {/* 상단 파도치는 물 표면 (roughness: 0.1, metalness: 0.1, transmission: 0.6 강제 적용) */}
-      <mesh ref={waterSurfaceRef} geometry={surfaceGeometry} receiveShadow>
-        <meshPhysicalMaterial
-          map={causticsTexture}
-          color="#0ea5e9"
-          emissive="#0284c7"
-          emissiveIntensity={0.38}
-          roughness={0.1}
-          metalness={0.1}
-          transmission={0.6}
-          ior={1.333}
-          reflectivity={0.9}
-          clearcoat={1.0}
-          clearcoatRoughness={0.08}
-          transparent
-          opacity={0.82}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-
-      {/* 하부 수체 볼륨 (수면과 절대 겹치지 않는 심해 볼륨) */}
-      <mesh ref={waterUnderVolumeRef} position={[0, 0.1, 0]}>
-        <boxGeometry args={[37.5, 1, 29.5]} />
-        <meshPhysicalMaterial
-          color="#0369a1"
-          emissive="#075985"
-          emissiveIntensity={0.28}
-          roughness={0.15}
-          metalness={0.1}
-          transmission={0.55}
-          transparent
-          opacity={0.52}
-          depthWrite={false}
-        />
-      </mesh>
-
-      {/* 기둥 주변 하얀 포말(Foam) 링 */}
-      <group ref={foamGroupRef} position={[0, 0.2, 0]}>
-        {PILLAR_COORDS.map(([px, pz], idx) => (
-          <mesh
-            key={`foam-ring-${idx}`}
-            position={[px, 0, pz]}
-            rotation={[-Math.PI / 2, 0, 0]}
-          >
-            <ringGeometry args={[0.74, 1.12, 28]} />
-            <meshBasicMaterial
-              color="#e0f2fe"
-              transparent
-              opacity={targetWaterLevel > 0.2 ? 0.72 : 0.15}
-              side={THREE.DoubleSide}
-            />
-          </mesh>
+      {/* 3 Wheelchair / Vulnerable Passenger Avatars */}
+      <group ref={wheelchairAgentsRef}>
+        {Array.from({ length: 3 }).map((_, idx) => (
+          <group key={idx}>
+            {/* Seated Passenger & Frame */}
+            <mesh position={[0, 0.48, 0]}>
+              <boxGeometry args={[0.42, 0.52, 0.45]} />
+              <meshStandardMaterial
+                color="#facc15"
+                emissive="#eab308"
+                emissiveIntensity={1.8}
+              />
+            </mesh>
+            {/* Head */}
+            <mesh position={[0, 0.92, 0]}>
+              <sphereGeometry args={[0.16, 12, 12]} />
+              <meshStandardMaterial
+                color="#fef9c3"
+                emissive="#facc15"
+                emissiveIntensity={1.4}
+              />
+            </mesh>
+            {/* Left & Right Wheelchair Wheels */}
+            <mesh position={[-0.26, 0.26, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.26, 0.26, 0.06, 16]} />
+              <meshStandardMaterial color="#0f172a" emissive="#ca8a04" emissiveIntensity={1.2} />
+            </mesh>
+            <mesh position={[0.26, 0.26, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.26, 0.26, 0.06, 16]} />
+              <meshStandardMaterial color="#0f172a" emissive="#ca8a04" emissiveIntensity={1.2} />
+            </mesh>
+          </group>
         ))}
       </group>
 
-      {/* 기둥 주변 하얀 포말 파티클 */}
-      <points ref={foamParticlesRef}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={foamPositions.length / 3}
-            array={foamPositions}
-            itemSize={3}
+      {/* Moving 3D Waterproof Glass Elevator Cab inside Shaft [13, y, -2] */}
+      <group ref={elevatorCabRef} position={[13, 1.2, -2]}>
+        <mesh>
+          <boxGeometry args={[2.2, 1.8, 2.2]} />
+          <meshPhysicalMaterial
+            color="#fef08a"
+            emissive="#eab308"
+            emissiveIntensity={0.85}
+            transparent
+            opacity={0.55}
+            roughness={0.1}
+            metalness={0.5}
           />
-        </bufferGeometry>
-        <pointsMaterial
-          color="#ffffff"
-          size={0.15}
-          transparent
-          opacity={targetWaterLevel > 0.2 ? 0.92 : 0.2}
-          depthWrite={false}
-        />
-      </points>
+        </mesh>
+        {/* Elevator Cab Floor Platform */}
+        <mesh position={[0, -0.85, 0]}>
+          <boxGeometry args={[2.25, 0.14, 2.25]} />
+          <meshStandardMaterial
+            color="#facc15"
+            emissive="#ca8a04"
+            emissiveIntensity={1.6}
+          />
+        </mesh>
+      </group>
     </group>
   );
 }
 
 /**
- * 위험 구역(dangerZone): 맥동하는 붉은 와이어프레임 큐브 + 아지랑이처럼 피어오르는 홀로그램 파티클
+ * Flowing Neon Evacuation Tubes (Green for General, Amber/Yellow for Vulnerable/ADA)
  */
-function DangerZoneHologram({ position }: { position: Vec3 }) {
-  const outerCubeRef = useRef<THREE.Mesh>(null);
-  const innerCoreRef = useRef<THREE.Mesh>(null);
-  const ringRef = useRef<THREE.Mesh>(null);
-  const particlesRef = useRef<THREE.Points>(null);
-  const targetVec = useMemo(() => new THREE.Vector3(...position), [position]);
+function EvacuationPaths({
+  evacuationPath,
+  vulnerablePath,
+  waterLevel,
+}: {
+  evacuationPath: [number, number, number][];
+  vulnerablePath: [number, number, number][];
+  waterLevel: number;
+}) {
+  const greenTex = useFlowingArrowTexture('#10b981', '#6ee7b7');
+  const yellowTex = useFlowingArrowTexture('#eab308', '#fef08a');
 
-  const { particlePositions, particleSpeeds, particleOffsets } = useMemo(() => {
-    const count = 96;
-    const pos = new Float32Array(count * 3);
-    const speeds = new Float32Array(count);
-    const offsets = new Float32Array(count * 3);
+  const greenCurve = useMemo(() => {
+    const pts = (evacuationPath.length >= 2
+      ? evacuationPath
+      : [
+          [-9, 0.4, 6],
+          [15, 0.5, -10],
+          [19.2, 3.8, -10],
+        ]
+    ).map(([x, y, z]) => new THREE.Vector3(x, Math.max(y, waterLevel * 0.3 + 0.32), z));
+    return new THREE.CatmullRomCurve3(pts);
+  }, [evacuationPath, waterLevel]);
 
-    for (let i = 0; i < count; i++) {
-      const ox = (((i * 17) % 100) / 100) * 2.8 - 1.4;
-      const oy = (((i * 31) % 100) / 100) * 3.8;
-      const oz = (((i * 47) % 100) / 100) * 2.8 - 1.4;
-      offsets[i * 3] = ox;
-      offsets[i * 3 + 1] = oy;
-      offsets[i * 3 + 2] = oz;
-      pos[i * 3] = position[0] + ox;
-      pos[i * 3 + 1] = oy;
-      pos[i * 3 + 2] = position[2] + oz;
-      speeds[i] = 0.9 + ((i * 13) % 10) * 0.14;
-    }
+  const yellowCurve = useMemo(() => {
+    const pts = (vulnerablePath.length >= 2
+      ? vulnerablePath
+      : [
+          [-7, 0.4, 4],
+          [13, 0.4, -2],
+          [13, 6.2, -2],
+        ]
+    ).map(([x, y, z]) => new THREE.Vector3(x, Math.max(y, waterLevel * 0.3 + 0.36), z));
+    return new THREE.CatmullRomCurve3(pts);
+  }, [vulnerablePath, waterLevel]);
 
-    return {
-      particlePositions: pos,
-      particleSpeeds: speeds,
-      particleOffsets: offsets,
-    };
-  }, [position]);
+  const greenTubeGeo = useMemo(
+    () => new THREE.TubeGeometry(greenCurve, 72, 0.2, 16, false),
+    [greenCurve]
+  );
+  const yellowTubeGeo = useMemo(
+    () => new THREE.TubeGeometry(yellowCurve, 72, 0.2, 16, false),
+    [yellowCurve]
+  );
 
-  useFrame((state, delta) => {
-    const t = state.clock.getElapsedTime();
+  const yellowMatRef = useRef<THREE.MeshStandardMaterial>(null);
 
-    if (outerCubeRef.current) {
-      outerCubeRef.current.position.lerp(targetVec, Math.min(1, delta * 4));
-      const pulse = 1 + Math.sin(t * 5.5) * 0.2;
-      outerCubeRef.current.scale.set(pulse, pulse, pulse);
-      outerCubeRef.current.rotation.y += delta * 1.1;
-      outerCubeRef.current.rotation.x = Math.sin(t * 2) * 0.15;
-    }
-
-    if (innerCoreRef.current) {
-      innerCoreRef.current.position.lerp(targetVec, Math.min(1, delta * 4));
-      innerCoreRef.current.rotation.y -= delta * 2.2;
-      innerCoreRef.current.rotation.z += delta * 1.5;
-    }
-
-    if (ringRef.current) {
-      ringRef.current.position.set(targetVec.x, 0.25, targetVec.z);
-      const ringScale = 1 + ((t * 2.0) % 2.2);
-      ringRef.current.scale.set(ringScale, ringScale, 1);
-    }
-
-    if (particlesRef.current) {
-      const attr = particlesRef.current.geometry.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < particleSpeeds.length; i++) {
-        const baseOx = particleOffsets[i * 3];
-        const baseOy = particleOffsets[i * 3 + 1];
-        const baseOz = particleOffsets[i * 3 + 2];
-        const risenY = (baseOy + t * particleSpeeds[i]) % 4.6;
-        const shimmerX = Math.sin(t * 3.0 + i) * 0.22;
-        const shimmerZ = Math.cos(t * 2.7 + i) * 0.22;
-
-        attr.setXYZ(
-          i,
-          targetVec.x + baseOx + shimmerX,
-          risenY + 0.2,
-          targetVec.z + baseOz + shimmerZ
-        );
-      }
-      attr.needsUpdate = true;
+  useFrame(({ clock }, delta) => {
+    if (greenTex) greenTex.offset.x -= delta * 2.4;
+    if (yellowTex) yellowTex.offset.x -= delta * 1.9;
+    if (yellowMatRef.current) {
+      yellowMatRef.current.emissiveIntensity =
+        1.7 + Math.sin(clock.getElapsedTime() * 6.5) * 0.55;
     }
   });
 
   return (
     <group>
-      <mesh ref={outerCubeRef} position={position}>
-        <boxGeometry args={[2.7, 2.7, 2.7]} />
+      <mesh geometry={greenTubeGeo}>
         <meshStandardMaterial
-          color="#ff2a5f"
-          emissive="#ff0044"
-          emissiveIntensity={2.8}
-          wireframe
-        />
-        <Html position={[0, 2.1, 0]} center distanceFactor={25}>
-          <div className="px-2.5 py-0.5 rounded bg-rose-600/95 text-white font-mono font-bold text-[10px] tracking-wider whitespace-nowrap border border-rose-200 shadow-[0_0_20px_rgba(244,63,94,0.95)] animate-pulse">
-            ⚠ CRITICAL HAZARD [{position[0]}, {position[1]}, {position[2]}]
-          </div>
-        </Html>
-      </mesh>
-
-      <mesh ref={innerCoreRef} position={position}>
-        <octahedronGeometry args={[1.05, 0]} />
-        <meshStandardMaterial
-          color="#ff0055"
-          emissive="#ff1744"
-          emissiveIntensity={3.2}
-          wireframe
+          map={greenTex ?? undefined}
+          emissiveMap={greenTex ?? undefined}
+          color="#10b981"
+          emissive="#34d399"
+          emissiveIntensity={1.9}
+          roughness={0.15}
           transparent
-          opacity={0.85}
+          opacity={0.95}
+        />
+      </mesh>
+      <Line
+        points={greenCurve.getPoints(50)}
+        color="#a7f3d0"
+        lineWidth={2.5}
+        transparent
+        opacity={0.85}
+      />
+
+      <mesh geometry={yellowTubeGeo}>
+        <meshStandardMaterial
+          ref={yellowMatRef}
+          map={yellowTex ?? undefined}
+          emissiveMap={yellowTex ?? undefined}
+          color="#facc15"
+          emissive="#fde047"
+          emissiveIntensity={2.0}
+          roughness={0.15}
+          transparent
+          opacity={0.96}
+        />
+      </mesh>
+      <Line
+        points={yellowCurve.getPoints(50)}
+        color="#fef9c3"
+        lineWidth={2.5}
+        dashed
+        dashSize={0.5}
+        gapSize={0.25}
+      />
+    </group>
+  );
+}
+
+/**
+ * Pulsing Red Wireframe Hazard Zone + Rising Thermal Plume Particles
+ */
+function DangerZoneHologram({
+  position,
+  status,
+  waterLevel,
+}: {
+  position: [number, number, number];
+  status: SimulationData['status'];
+  waterLevel: number;
+}) {
+  const cubeRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
+  const particlesRef = useRef<THREE.Points>(null);
+
+  const particleCount = 130;
+  const particleData = useMemo(() => {
+    const arr = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount; i++) {
+      arr[i * 3] = (Math.random() - 0.5) * 3.8;
+      arr[i * 3 + 1] = Math.random() * 4.2;
+      arr[i * 3 + 2] = (Math.random() - 0.5) * 3.8;
+    }
+    return arr;
+  }, []);
+
+  useFrame(({ clock }, delta) => {
+    const t = clock.getElapsedTime();
+    if (cubeRef.current) {
+      const pulse = 1 + Math.sin(t * 5) * 0.14;
+      cubeRef.current.scale.set(pulse, pulse, pulse);
+      cubeRef.current.rotation.y += delta * 0.9;
+    }
+    if (ringRef.current) {
+      const s = 1 + ((t * 1.6) % 1.8);
+      ringRef.current.scale.set(s, s, 1);
+    }
+    if (particlesRef.current) {
+      const posAttr = particlesRef.current.geometry.attributes.position as THREE.BufferAttribute;
+      const arr = posAttr.array as Float32Array;
+      for (let i = 0; i < particleCount; i++) {
+        arr[i * 3 + 1] += delta * (1.2 + (i % 5) * 0.35);
+        arr[i * 3] += Math.sin(t * 3 + i) * 0.01;
+        if (arr[i * 3 + 1] > 4.6) {
+          arr[i * 3 + 1] = 0;
+        }
+      }
+      posAttr.needsUpdate = true;
+    }
+  });
+
+  if (status === 'CLEAR') return null;
+
+  const baseY = Math.max(position[1], waterLevel + 0.25);
+
+  return (
+    <group position={[position[0], baseY, position[2]]}>
+      <mesh ref={cubeRef} position={[0, 1.2, 0]}>
+        <boxGeometry args={[2.8, 2.8, 2.8]} />
+        <meshStandardMaterial
+          color="#ef4444"
+          emissive="#ef4444"
+          emissiveIntensity={2.5}
+          wireframe
         />
       </mesh>
 
-      <mesh
-        ref={ringRef}
-        position={[position[0], 0.25, position[2]]}
-        rotation={[-Math.PI / 2, 0, 0]}
-      >
-        <ringGeometry args={[1.4, 1.9, 36]} />
-        <meshBasicMaterial color="#ff2a5f" transparent opacity={0.85} side={THREE.DoubleSide} />
+      <mesh ref={ringRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
+        <ringGeometry args={[1.5, 2.0, 36]} />
+        <meshBasicMaterial color="#ef4444" transparent opacity={0.75} side={THREE.DoubleSide} />
       </mesh>
 
       <points ref={particlesRef}>
         <bufferGeometry>
           <bufferAttribute
             attach="attributes-position"
-            count={particlePositions.length / 3}
-            array={particlePositions}
+            count={particleCount}
+            array={particleData}
             itemSize={3}
           />
         </bufferGeometry>
         <pointsMaterial
-          color="#ff4d6d"
-          size={0.2}
+          color="#f87171"
+          size={0.18}
           transparent
-          opacity={0.92}
+          opacity={0.85}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
       </points>
-    </group>
-  );
-}
 
-/**
- * 3. 대피선 (TubeGeometry + texture.offset.x 고속 스크롤 동적 네온 튜브):
- * - 텍스처의 offset.x를 계속 변화시켜 화살표 불빛이 탈출구 방향으로 빠르게 흘러가는 동적 네온 튜브 구현
- */
-function DynamicEvacuationPath({
-  points,
-  color,
-  label,
-  isBlinking = false,
-}: {
-  points: Vec3[];
-  color: string;
-  label: string;
-  isBlinking?: boolean;
-}) {
-  const arrowTexture = useMemo(() => createFlowingArrowTexture(color), [color]);
-  const glowMatRef = useRef<THREE.MeshBasicMaterial>(null);
-
-  const curve = useMemo(() => {
-    const validPoints =
-      points && points.length >= 2
-        ? points.map((p) => new THREE.Vector3(p[0], p[1] + 0.35, p[2]))
-        : [new THREE.Vector3(0, 0.8, 0), new THREE.Vector3(5, 1.8, 5)];
-    return new THREE.CatmullRomCurve3(validPoints, false, "catmullrom", 0.35);
-  }, [points]);
-
-  // 내부 화살표 코어 TubeGeometry
-  const innerTubeGeometry = useMemo(() => {
-    return new THREE.TubeGeometry(curve, 80, 0.22, 16, false);
-  }, [curve]);
-
-  // 외곽 발광 네온 후광(Halo) TubeGeometry
-  const outerHaloGeometry = useMemo(() => {
-    return new THREE.TubeGeometry(curve, 80, 0.38, 16, false);
-  }, [curve]);
-
-  const midPoint = useMemo(() => curve.getPointAt(0.5), [curve]);
-
-  useFrame((state, delta) => {
-    // 텍스처의 offset.x를 지속 변화시켜 화살표 불빛이 탈출구 방향으로 빠르게 흘러가게 함
-    arrowTexture.offset.x -= delta * 2.8;
-
-    if (glowMatRef.current) {
-      const t = state.clock.getElapsedTime();
-      if (isBlinking) {
-        glowMatRef.current.opacity = 0.28 + Math.abs(Math.sin(t * 6.5)) * 0.42;
-      } else {
-        glowMatRef.current.opacity = 0.32 + Math.sin(t * 3.0) * 0.12;
-      }
-    }
-  });
-
-  return (
-    <group>
-      {/* 내부 화살표 텍스처가 빠르게 흐르는 코어 3D 튜브 */}
-      <mesh geometry={innerTubeGeometry}>
-        <meshStandardMaterial
-          map={arrowTexture}
-          emissiveMap={arrowTexture}
-          emissive={color}
-          emissiveIntensity={2.6}
-          roughness={0.15}
-          metalness={0.1}
-        />
-      </mesh>
-
-      {/* 외곽 홀로그램 글로우 튜브 (Additive Blending) */}
-      <mesh geometry={outerHaloGeometry}>
-        <meshBasicMaterial
-          ref={glowMatRef}
-          color={color}
-          transparent
-          opacity={0.35}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
-      </mesh>
-
-      <Html position={[midPoint.x, midPoint.y + 0.9, midPoint.z]} center distanceFactor={26}>
-        <div
-          className="px-2.5 py-0.5 rounded bg-slate-950/95 text-[10px] font-mono font-bold whitespace-nowrap border shadow-lg"
-          style={{
-            color,
-            borderColor: color,
-            boxShadow: `0 0 14px ${color}88`,
-          }}
-        >
-          {label}
+      <Html position={[0, 3.2, 0]} center distanceFactor={20}>
+        <div className="px-3 py-1 rounded bg-red-600/95 border border-red-300 text-xs font-mono font-bold text-white shadow-[0_0_24px_rgba(239,68,68,0.95)] animate-pulse whitespace-nowrap">
+          ⚠ CRITICAL HAZARD [{position[0]}, {position[2]}]
         </div>
       </Html>
     </group>
@@ -978,245 +1188,135 @@ function DynamicEvacuationPath({
 }
 
 /**
- * 4. 드론 서치라이트:
- * - 드론 기체 바로 밑에 바닥과 어두운 물 위를 원형으로 강력하게 비추는 SpotLight
- *   (angle: 0.4, penumbra: 0.8, color: '#ffffff') 장착
- * - 수면 위 원형 서치라이트 타겟 프로젝션 링 & 볼류메트릭 광선 콘
+ * Autonomous Rescue Drone (UAV-01) with Downward Volumetric Searchlight
  */
-function AutonomousRescueDrone({
+function RescueDrone({
   target,
-  waterLevel,
+  dangerZone,
+  status,
 }: {
-  target: Vec3;
-  waterLevel: number;
+  target: [number, number, number];
+  dangerZone: [number, number, number];
+  status: SimulationData['status'];
 }) {
-  const droneGroupRef = useRef<THREE.Group>(null);
-  const rotorRefs = useRef<(THREE.Mesh | null)[]>([]);
-  const redLedMatRef = useRef<THREE.MeshStandardMaterial>(null);
-  const blueLedMatRef = useRef<THREE.MeshStandardMaterial>(null);
-  const redLightRef = useRef<THREE.PointLight>(null);
-  const blueLightRef = useRef<THREE.PointLight>(null);
+  const droneRef = useRef<THREE.Group>(null);
+  const rotorsRef = useRef<(THREE.Mesh | null)[]>([]);
+  const redLedRef = useRef<THREE.MeshStandardMaterial>(null);
+  const blueLedRef = useRef<THREE.MeshStandardMaterial>(null);
   const spotLightRef = useRef<THREE.SpotLight>(null);
-  const searchRingRef = useRef<THREE.Group>(null);
-  const dustPointsRef = useRef<THREE.Points>(null);
+  const spotTarget = useMemo(() => new THREE.Object3D(), []);
 
-  const targetVector = useMemo(() => new THREE.Vector3(...target), [target]);
-  const spotTargetObj = useMemo(() => new THREE.Object3D(), []);
-
-  // 드론 서치라이트 빔 내부 빛 파편 파티클
-  const dustOffsets = useMemo(() => {
-    const count = 72;
-    const arr = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      arr[i * 3] = (((i * 23) % 100) / 100 - 0.5) * 3.2;
-      arr[i * 3 + 1] = -(((i * 41) % 100) / 100) * 4.5;
-      arr[i * 3 + 2] = (((i * 67) % 100) / 100 - 0.5) * 3.2;
-    }
-    return arr;
-  }, []);
-
-  useFrame((state, delta) => {
-    const t = state.clock.getElapsedTime();
-
-    if (droneGroupRef.current) {
-      // 드론이 물 위를 수색하듯 선회 + 호버링
-      const patrolOffsetX = Math.sin(t * 1.4) * 1.6;
-      const patrolOffsetZ = Math.cos(t * 1.1) * 1.6;
-      const hoverY = Math.sin(t * 3.6) * 0.18;
-
+  useFrame(({ clock }, delta) => {
+    const t = clock.getElapsedTime();
+    if (droneRef.current) {
       const desired = new THREE.Vector3(
-        targetVector.x + patrolOffsetX,
-        Math.max(4.6, targetVector.y + 1.2) + hoverY,
-        targetVector.z + patrolOffsetZ
+        target[0] + Math.sin(t * 1.4) * 1.1,
+        Math.max(3.6, target[1]) + Math.sin(t * 3.0) * 0.22,
+        target[2] + Math.cos(t * 1.4) * 1.1
       );
-
-      droneGroupRef.current.position.lerp(desired, Math.min(1, delta * 3.5));
-      droneGroupRef.current.rotation.z = Math.sin(t * 2.2) * 0.06;
-      droneGroupRef.current.rotation.x = Math.cos(t * 1.8) * 0.06;
-
-      // 드론 바로 아래(수면/바닥)를 비추는 SpotLight 타겟 동기화
-      const curPos = droneGroupRef.current.position;
-      const sweepX = curPos.x + Math.sin(t * 2.5) * 0.6;
-      const sweepZ = curPos.z + Math.cos(t * 2.5) * 0.6;
-      const surfaceY = Math.max(0.15, waterLevel + 0.08);
-
-      spotTargetObj.position.set(sweepX, surfaceY, sweepZ);
-
-      if (spotLightRef.current) {
-        spotLightRef.current.target = spotTargetObj;
-      }
-
-      if (searchRingRef.current) {
-        searchRingRef.current.position.set(sweepX, surfaceY + 0.04, sweepZ);
-        searchRingRef.current.rotation.z = t * 1.8;
-      }
+      droneRef.current.position.lerp(desired, Math.min(1, delta * 3.2));
+      droneRef.current.rotation.z = Math.sin(t * 2.2) * 0.08;
+      droneRef.current.rotation.x = Math.cos(t * 1.8) * 0.08;
     }
 
-    rotorRefs.current.forEach((rotor) => {
-      if (rotor) rotor.rotation.y += delta * 36;
+    const aimPos =
+      status === 'CLEAR'
+        ? new THREE.Vector3(target[0], 0, target[2])
+        : new THREE.Vector3(dangerZone[0], 0.2, dangerZone[2]);
+    spotTarget.position.lerp(aimPos, Math.min(1, delta * 5));
+
+    if (spotLightRef.current) {
+      spotLightRef.current.target = spotTarget;
+    }
+
+    rotorsRef.current.forEach((r) => {
+      if (r) r.rotation.y += delta * 38;
     });
 
-    const strobe = Math.sin(t * 18) > 0;
-    if (redLedMatRef.current) {
-      redLedMatRef.current.emissiveIntensity = strobe ? 4.5 : 0.2;
-    }
-    if (blueLedMatRef.current) {
-      blueLedMatRef.current.emissiveIntensity = !strobe ? 4.5 : 0.2;
-    }
-    if (redLightRef.current) {
-      redLightRef.current.intensity = strobe ? 4.5 : 0.1;
-    }
-    if (blueLightRef.current) {
-      blueLightRef.current.intensity = !strobe ? 4.5 : 0.1;
-    }
-
-    if (dustPointsRef.current) {
-      dustPointsRef.current.rotation.y += delta * 0.45;
-    }
+    const flash = Math.sin(t * 16) > 0;
+    if (redLedRef.current) redLedRef.current.emissiveIntensity = flash ? 4.2 : 0.2;
+    if (blueLedRef.current) blueLedRef.current.emissiveIntensity = !flash ? 4.2 : 0.2;
   });
-
-  const armOffsets: [number, number][] = [
-    [-0.8, -0.8],
-    [0.8, -0.8],
-    [-0.8, 0.8],
-    [0.8, 0.8],
-  ];
 
   return (
     <>
-      <primitive object={spotTargetObj} />
-
-      {/* 드론 서치라이트가 물 위를 비추는 원형 홀로그램 타겟 링 */}
-      <group ref={searchRingRef} position={[target[0], 1.0, target[2]]} rotation={[-Math.PI / 2, 0, 0]}>
-        <mesh>
-          <ringGeometry args={[0.1, 1.85, 36]} />
-          <meshBasicMaterial
-            color="#ffffff"
-            transparent
-            opacity={0.38}
-            blending={THREE.AdditiveBlending}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-          />
-        </mesh>
-        <mesh>
-          <ringGeometry args={[1.8, 2.05, 36]} />
-          <meshBasicMaterial
-            color="#38bdf8"
-            transparent
-            opacity={0.85}
-            blending={THREE.AdditiveBlending}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-          />
-        </mesh>
-      </group>
-
-      <group ref={droneGroupRef} position={[0, 4.8, 0]}>
-        {/* 드론 기체 코어 */}
+      <primitive object={spotTarget} />
+      <group ref={droneRef} position={[0, 4.2, 0]}>
         <mesh castShadow>
-          <boxGeometry args={[0.9, 0.28, 0.9]} />
-          <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.15} />
+          <boxGeometry args={[0.95, 0.26, 0.95]} />
+          <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.2} />
         </mesh>
 
-        {/* 하단 서치라이트 짐벌 렌즈 코어 */}
-        <mesh position={[0, -0.18, 0]}>
-          <sphereGeometry args={[0.22, 16, 16]} />
-          <meshBasicMaterial color="#ffffff" />
-        </mesh>
-
-        {/* 좌/우 적색·청색 스트로브 LED */}
-        <mesh position={[-0.45, 0.16, 0]}>
-          <sphereGeometry args={[0.14, 12, 12]} />
-          <meshStandardMaterial
-            ref={redLedMatRef}
-            color="#ff1744"
-            emissive="#ff1744"
-            emissiveIntensity={4.0}
-          />
-        </mesh>
-        <pointLight ref={redLightRef} position={[-0.5, 0.2, 0]} color="#ff1744" distance={10} />
-
-        <mesh position={[0.45, 0.16, 0]}>
-          <sphereGeometry args={[0.14, 12, 12]} />
-          <meshStandardMaterial
-            ref={blueLedMatRef}
-            color="#00e5ff"
-            emissive="#00e5ff"
-            emissiveIntensity={4.0}
-          />
-        </mesh>
-        <pointLight ref={blueLightRef} position={[0.5, 0.2, 0]} color="#00e5ff" distance={10} />
-
-        {/* 4축 로터 암 */}
-        {armOffsets.map(([ax, az], idx) => (
-          <group key={`rotor-arm-${idx}`} position={[ax, 0.05, az]}>
+        {[
+          [-0.68, 0.12, -0.68],
+          [0.68, 0.12, -0.68],
+          [-0.68, 0.12, 0.68],
+          [0.68, 0.12, 0.68],
+        ].map(([rx, ry, rz], idx) => (
+          <group key={idx} position={[rx, ry, rz]}>
             <mesh>
-              <cylinderGeometry args={[0.07, 0.07, 0.22, 12]} />
-              <meshStandardMaterial color="#38bdf8" metalness={0.8} roughness={0.2} />
+              <cylinderGeometry args={[0.07, 0.07, 0.18, 12]} />
+              <meshStandardMaterial color="#38bdf8" metalness={0.8} />
             </mesh>
             <mesh
               ref={(el) => {
-                rotorRefs.current[idx] = el;
+                rotorsRef.current[idx] = el;
               }}
-              position={[0, 0.14, 0]}
+              position={[0, 0.11, 0]}
             >
-              <boxGeometry args={[0.68, 0.025, 0.1]} />
-              <meshStandardMaterial color="#ffffff" transparent opacity={0.88} />
+              <boxGeometry args={[0.78, 0.02, 0.09]} />
+              <meshBasicMaterial color="#e0f2fe" transparent opacity={0.85} />
             </mesh>
           </group>
         ))}
 
-        {/* 드론 기체 바로 밑에 바닥/수면을 원형으로 비추는 강력한 SpotLight (angle: 0.4, penumbra: 0.8, color: '#ffffff') */}
-        <spotLight
-          ref={spotLightRef}
-          position={[0, -0.2, 0]}
-          color="#ffffff"
-          angle={0.4}
-          penumbra={0.8}
-          intensity={110}
-          distance={32}
-          decay={1.1}
-          castShadow
-        />
-
-        {/* 드론 바로 아래로 뻗어나가는 볼류메트릭 백색 서치라이트 원추 광선 */}
-        <mesh position={[0, -2.3, 0]}>
-          <coneGeometry args={[1.95, 4.6, 32, 1, true]} />
-          <meshBasicMaterial
-            color="#ffffff"
-            transparent
-            opacity={0.22}
-            side={THREE.DoubleSide}
-            blending={THREE.AdditiveBlending}
-            depthWrite={false}
+        {/* Strobe LEDs */}
+        <mesh position={[-0.45, 0.18, 0.45]}>
+          <sphereGeometry args={[0.11, 12, 12]} />
+          <meshStandardMaterial
+            ref={redLedRef}
+            color="#ef4444"
+            emissive="#ef4444"
+            emissiveIntensity={3}
+          />
+        </mesh>
+        <mesh position={[0.45, 0.18, 0.45]}>
+          <sphereGeometry args={[0.11, 12, 12]} />
+          <meshStandardMaterial
+            ref={blueLedRef}
+            color="#3b82f6"
+            emissive="#3b82f6"
+            emissiveIntensity={3}
           />
         </mesh>
 
-        {/* 드론 주변 빛 파편 파티클 */}
-        <points ref={dustPointsRef}>
-          <bufferGeometry>
-            <bufferAttribute
-              attach="attributes-position"
-              count={dustOffsets.length / 3}
-              array={dustOffsets}
-              itemSize={3}
-            />
-          </bufferGeometry>
-          <pointsMaterial
+        {/* Downward Searchlight Cone */}
+        <mesh position={[0, -2.0, 0]}>
+          <coneGeometry args={[1.95, 4.0, 28, 1, true]} />
+          <meshBasicMaterial
             color="#e0f2fe"
-            size={0.12}
             transparent
-            opacity={0.85}
-            blending={THREE.AdditiveBlending}
+            opacity={0.13}
+            side={THREE.DoubleSide}
             depthWrite={false}
+            blending={THREE.AdditiveBlending}
           />
-        </points>
+        </mesh>
 
-        <Html position={[0, 1.0, 0]} center distanceFactor={24}>
-          <div className="px-2.5 py-0.5 rounded bg-slate-950/95 text-cyan-300 font-mono text-[10px] font-bold border border-cyan-400 shadow-[0_0_16px_rgba(6,182,212,0.9)] whitespace-nowrap flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-            <span>🚁 INTERCEPTOR DRONE-A1 [{target[0]}, {target[1]}, {target[2]}]</span>
+        <spotLight
+          ref={spotLightRef}
+          position={[0, -0.15, 0]}
+          angle={0.58}
+          penumbra={0.5}
+          intensity={55}
+          distance={26}
+          color="#f0f9ff"
+          castShadow
+        />
+
+        <Html position={[0, 0.85, 0]} center distanceFactor={20}>
+          <div className="px-2 py-0.5 rounded bg-cyan-950/90 border border-cyan-400/80 text-[10px] font-mono text-cyan-200 whitespace-nowrap shadow-[0_0_14px_rgba(34,211,238,0.6)]">
+            🚁 UAV-01 ARGON SCOUT (THERMAL LOCK)
           </div>
         </Html>
       </group>
@@ -1224,127 +1324,157 @@ function AutonomousRescueDrone({
   );
 }
 
-export default function ThreeViewer({ simulation, scenarioTrigger = 0 }: ThreeViewerProps) {
-  const controlsRef = useRef<OrbitControlsImpl | null>(null);
-  const [manualSweepCounter, setManualSweepCounter] = useState(0);
+export default function ThreeViewer({ simulationData }: ThreeViewerProps) {
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('OVERVIEW');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const controlsRef = useRef<any>(null);
 
   return (
-    <div className="relative w-full h-full bg-[#020617] overflow-hidden select-none">
-      {/* 상단 3D 뷰포트 시네마틱 HUD 오버레이 */}
-      <div className="absolute top-4 left-4 right-4 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="px-3 py-1.5 rounded-lg bg-slate-950/90 backdrop-blur-xl border border-cyan-500/50 text-xs font-mono text-slate-100 flex items-center gap-2 shadow-[0_0_20px_rgba(6,182,212,0.25)]">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-            <span>CAM-04 // 여의도역 B2-B3 환승대합실 (LIVE DIGITAL TWIN)</span>
-          </div>
-          <div className="px-3 py-1.5 rounded-lg bg-slate-950/90 backdrop-blur-xl border border-sky-500/50 text-xs font-mono text-sky-300 shadow-[0_0_15px_rgba(14,165,233,0.25)]">
-            FLOOD DEPTH: {simulation.waterLevel.toFixed(2)}m / 5.00m
-          </div>
-          <div className="hidden xl:flex px-3 py-1.5 rounded-lg bg-emerald-950/90 backdrop-blur-xl border border-emerald-500/50 text-xs font-mono text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.25)]">
-            TARGET: 골든타임 6분 내 120명 전원 안전 대피
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setManualSweepCounter((c) => c + 1)}
-          className="pointer-events-auto px-3 py-1.5 rounded-lg bg-slate-950/90 hover:bg-cyan-950/80 border border-cyan-400/60 text-[11px] font-mono text-cyan-300 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-        >
-          🎥 CINEMATIC ORBIT SWEEP
-        </button>
-      </div>
-
-      {/* 하단 3D 홀로그램 범례 오버레이 */}
-      <div className="absolute bottom-4 left-4 z-10 flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-xl bg-slate-950/90 backdrop-blur-xl border border-slate-700/80 text-[11px] font-mono text-slate-200 pointer-events-none shadow-2xl">
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-1.5 rounded-full bg-[#00ff9d] shadow-[0_0_10px_#00ff9d]" />
-          일반 대피선 (Flowing Green Tube)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-1.5 rounded-full bg-[#fbbf24] shadow-[0_0_10px_#fbbf24] animate-pulse" />
-          교통약자/엘리베이터 우회선 (Flashing Yellow Tube)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 border border-[#ff2a5f] bg-[#ff2a5f]/40 animate-ping" />
-          홀로그램 위험 구역 (Hazard Particles)
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_8px_#38bdf8]" />
-          드론 수직 서치라이트 (SpotLight)
-        </span>
-      </div>
-
+    <div className="relative w-full h-full bg-[#020617] select-none">
       <Canvas
         shadows
-        camera={{ position: [26, 18, 26], fov: 40, near: 0.1, far: 180 }}
-        gl={{ antialias: true, alpha: false }}
+        dpr={[1, 2]}
+        camera={{ position: [0, 17, 25], fov: 46, near: 0.1, far: 160 }}
+        gl={{
+          antialias: true,
+          powerPreference: 'high-performance',
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 1.25,
+        }}
       >
-        {/* 1. THREE.FogExp2('#020617', 0.02) 지수 안개 적용 */}
-        <ExponentialSceneFog />
+        <color attach="background" args={['#020617']} />
+        <fogExp2 attach="fog" args={['#020617', 0.016]} />
 
-        {/* 시네마틱 재난 조명 + 메탈 타일과 수면 반사광을 살리는 입체 라이팅 */}
-        <ambientLight intensity={0.42} />
-        <hemisphereLight args={["#38bdf8", "#020617", 0.65]} />
+        {/* Balanced Cinema-Grade Underground Lighting */}
+        <ambientLight intensity={0.75} color="#cbd5e1" />
+        <hemisphereLight args={['#38bdf8', '#0f172a', 0.95]} />
         <directionalLight
-          position={[16, 28, 14]}
-          intensity={1.25}
-          color="#bae6fd"
+          position={[14, 24, 16]}
+          intensity={1.55}
+          color="#f8fafc"
           castShadow
           shadow-mapSize-width={1024}
           shadow-mapSize-height={1024}
         />
-        <pointLight position={[-12, 5.2, -6]} intensity={2.2} color="#0ea5e9" distance={26} />
-        <pointLight position={[12, 5.2, 6]} intensity={2.2} color="#38bdf8" distance={26} />
 
-        {/* 1. 메탈 타일 바닥 & 벽면 + 기둥 젖은 질감 */}
-        <SubwayStationArchitecture waterLevel={simulation.waterLevel} />
+        {/* Emergency Hazard & Safe Exit Accent Lights */}
+        <pointLight
+          position={[-14, 4.5, 10]}
+          intensity={simulationData.status === 'DANGER' ? 24 : 8}
+          distance={24}
+          color={simulationData.status === 'DANGER' ? '#ef4444' : '#38bdf8'}
+        />
+        <pointLight position={[15, 4.5, -10]} intensity={16} distance={22} color="#10b981" />
+        <pointLight position={[13, 4.5, -2]} intensity={16} distance={20} color="#facc15" />
 
-        {/* 2. 물(Water) 물리 표현 (roughness: 0.1, metalness: 0.1, transmission: 0.6 + sin 파도) */}
-        <RisingWaterAndFoam targetWaterLevel={simulation.waterLevel} />
-
-        {/* 위험 구역 홀로그램 */}
-        <DangerZoneHologram position={simulation.dangerZone} />
-
-        {/* 3. 대피선 TubeGeometry (texture.offset.x가 고속 스크롤되는 네온 화살표 튜브) */}
-        <DynamicEvacuationPath
-          points={simulation.evacuationPath}
-          color="#00ff9d"
-          label="일반 대피 경로 (Standard Flow)"
-          isBlinking={false}
+        {/* 1. Station Architecture + Subway Train Car + Rising Floodgate */}
+        <SubwayStationArchitecture
+          waterLevel={simulationData.waterLevel}
+          status={simulationData.status}
         />
 
-        <DynamicEvacuationPath
-          points={simulation.vulnerablePath}
-          color="#fbbf24"
-          label="♿ 교통약자 엘리베이터 우회선 (Priority Pulse)"
-          isBlinking={true}
+        {/* 2. Cascading Stairwell Waterfall on West Exit #1 */}
+        <StairwellWaterfall waterLevel={simulationData.waterLevel} />
+
+        {/* 3. Volumetric Floodwater + Wave Surface + Pillar Foam */}
+        <FloodWaterSystem targetWaterLevel={simulationData.waterLevel} />
+
+        {/* 4. Scrolling Neon Evacuation Tubes */}
+        <EvacuationPaths
+          evacuationPath={simulationData.evacuationPath}
+          vulnerablePath={simulationData.vulnerablePath}
+          waterLevel={simulationData.waterLevel}
         />
 
-        {/* 4. 드론 서치라이트 (기체 바로 밑 SpotLight angle: 0.4, penumbra: 0.8, color: '#ffffff') */}
-        <AutonomousRescueDrone
-          target={simulation.droneTarget}
-          waterLevel={simulation.waterLevel}
+        {/* 5. Animated 3D Commuters, Wheelchair Passenger & Moving Elevator Cab */}
+        <EvacuationAgentsAndElevator
+          evacuationPath={simulationData.evacuationPath}
+          vulnerablePath={simulationData.vulnerablePath}
+          waterLevel={simulationData.waterLevel}
         />
 
-        {/* 시네마틱 카메라 오빗 */}
-        <CinematicCameraRig
-          simulation={simulation}
-          scenarioTrigger={scenarioTrigger + manualSweepCounter}
+        {/* 6. Pulsing Red Wireframe Hazard Zone */}
+        <DangerZoneHologram
+          position={simulationData.dangerZone}
+          status={simulationData.status}
+          waterLevel={simulationData.waterLevel}
+        />
+
+        {/* 7. Autonomous Rescue Drone with Volumetric Searchlight */}
+        <RescueDrone
+          target={simulationData.droneTarget}
+          dangerZone={simulationData.dangerZone}
+          status={simulationData.status}
+        />
+
+        <CameraController
+          preset={cameraPreset}
+          simulationData={simulationData}
           controlsRef={controlsRef}
         />
 
         <OrbitControls
           ref={controlsRef}
-          makeDefault
-          target={[0, 1.2, 0]}
-          minPolarAngle={0.18}
-          maxPolarAngle={Math.PI / 2 - 0.04}
-          minDistance={9}
-          maxDistance={52}
           enableDamping
-          dampingFactor={0.05}
+          dampingFactor={0.06}
+          maxPolarAngle={Math.PI / 2 - 0.04}
+          minDistance={6}
+          maxDistance={46}
+          target={[0, 1.2, 0]}
         />
       </Canvas>
+
+      {/* Interactive 4-Angle Tactical Camera Switcher (Bottom-Center / Left HUD) */}
+      <div className="pointer-events-auto absolute bottom-5 left-5 z-20 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-950/85 backdrop-blur-xl border border-cyan-500/30 shadow-[0_0_25px_rgba(0,0,0,0.8)]">
+          <span className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider text-cyan-400 px-1.5">
+            <Camera className="w-3.5 h-3.5" />
+            3D CAM:
+          </span>
+          {(
+            [
+              { id: 'OVERVIEW', label: '전체 관제 뷰', icon: Eye },
+              { id: 'FLOOD_STAIRS', label: '1번 계단 폭우 유입', icon: ShieldAlert },
+              { id: 'ELEVATOR_ADA', label: '교통약자 엘리베이터 #3', icon: Accessibility },
+              { id: 'DRONE_CAM', label: '드론(UAV-01) 추적 뷰', icon: Video },
+            ] as const
+          ).map((cam) => {
+            const Icon = cam.icon;
+            const active = cameraPreset === cam.id;
+            return (
+              <button
+                key={cam.id}
+                type="button"
+                onClick={() => setCameraPreset(cam.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-mono transition-all ${
+                  active
+                    ? 'bg-cyan-500/25 text-cyan-200 border border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.4)] font-semibold'
+                    : 'bg-slate-900/70 text-slate-300 border border-slate-700/70 hover:border-cyan-500/40 hover:text-white'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {cam.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 3D Legend Bar */}
+        <div className="pointer-events-none flex flex-wrap items-center gap-3 px-3.5 py-2 rounded-xl bg-slate-950/80 backdrop-blur-md border border-slate-800/90 text-[11px] font-mono text-slate-300">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#10b981]" />
+            일반 대피로 (4번 고지대 계단 · 106명)
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 shadow-[0_0_8px_#facc15]" />
+            교통약자 우회로 (방수 엘리베이터 #3 · 14명)
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+            드래그: 360° 회전 / 휠: 줌
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

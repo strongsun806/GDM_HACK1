@@ -1,288 +1,218 @@
-"use client";
+'use client';
 
-import React, { useState, useCallback, useEffect } from "react";
-import dynamic from "next/dynamic";
-import { Shield, Radio, Cpu, Eye } from "lucide-react";
-import VoiceController from "@/components/VoiceController";
-import DashboardPanel from "@/components/DashboardPanel";
-import { SimulationData, SystemLogEntry } from "@/types/simulation";
+import React, { useState, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+import DashboardPanel from '@/components/DashboardPanel';
+import { SimulationData, AgentLogEntry } from '@/types/simulation';
 
-// Next.js App Router SSR 충돌 방지를 위해 ThreeViewer를 dynamic import (ssr: false)로 로드
-const ThreeViewer = dynamic(() => import("@/components/ThreeViewer"), {
+// Strictly isolate Three.js WebGL Canvas from SSR to prevent Next.js hydration mismatches
+const ThreeViewer = dynamic(() => import('@/components/ThreeViewer'), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-full bg-[#02050b] flex flex-col items-center justify-center gap-3 text-cyan-400 font-mono">
-      <div className="w-11 h-11 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin shadow-[0_0_20px_rgba(6,182,212,0.5)]" />
-      <p className="text-xs tracking-widest uppercase animate-pulse">
-        INITIALIZING 3D DIGITAL TWIN MONITOR (YEOUIDO B2-B3)...
+    <div className="w-full h-screen bg-[#020617] flex flex-col items-center justify-center text-cyan-400 font-mono gap-3">
+      <div className="w-12 h-12 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+      <p className="text-sm tracking-widest uppercase">
+        Initializing SafeCity 3D Digital Twin Engine...
       </p>
     </div>
   ),
 });
 
-const INITIAL_SIMULATION: SimulationData = {
-  status: "DANGER",
-  scenario: "폭우로 인한 여의도역 지하 2층 개찰구 급속 침수 및 비상 탈출",
+const INITIAL_SIMULATION_DATA: SimulationData = {
+  status: 'DANGER',
+  scenario: '제1출구 계단 폭우 폭포수 유입 및 승강장 급속 침수 (코드 레드)',
   waterLevel: 2.4,
-  dangerZone: [-10, 1.5, 6],
+  dangerZone: [-14, 0.6, 10],
   evacuationPath: [
-    [-9, 1.2, 5],
-    [-2, 1.2, 2],
-    [6, 1.4, 4],
-    [12, 2.2, 8],
-    [16, 4.5, 11],
+    [-9, 0.4, 6],
+    [-4, 0.4, 3],
+    [2, 0.4, 0],
+    [9, 0.4, -5],
+    [15, 0.5, -10],
+    [19.2, 3.8, -10],
   ],
   vulnerablePath: [
-    [-8, 1.2, 2],
-    [1, 1.2, -1],
-    [8, 1.2, -2],
-    [13, 1.3, -2],
-    [13, 4.6, -2],
-    [16, 4.6, 9],
+    [-7, 0.4, 4],
+    [-1, 0.4, 2],
+    [5, 0.4, 0],
+    [11, 0.4, -1.5],
+    [13, 0.4, -2],
+    [13, 6.2, -2],
   ],
-  droneTarget: [-10, 3.6, 6],
+  droneTarget: [-11.5, 3.9, 8.5],
   aiReport: {
     summary:
-      "시간당 110mm 극한 호우로 서측 개찰구 유입수 급증(수위 2.4m). 서측 일반 계단이 위험 구역[-10, 1.5, 6]으로 판정되어 동측 비상계단 및 방수 엘리베이터로 경로 재탐색 완료.",
-    casualties: "대합실 체류 승객 68명 긴급 대피 필요 | 잔여 골든타임 04분 50초",
-    actionRequired:
-      "서측 개찰구 차수문 즉시 폐쇄, 일반 승객은 동남측 비상출구(네온 그린 경로)로, 휠체어/교통약자는 동측 방수 엘리베이터 타워(옐로우 경로)로 분산 유도.",
+      '시간당 110mm 극한 호우로 서쪽 1번 출구 계단([-14, 0, 10])이 폭포수처럼 범람하며 지하 승강장 수위가 2.4m까지 급상승 중입니다. 서쪽 계단은 강한 유속(2.7m/s)으로 보행 대피가 불가능하여 즉시 차수판이 기립되었으며, 동쪽 고지대 4번 출구 및 방수 엘리베이터 #3으로 전 인원(120명) 분산 대피 경로가 수립되었습니다.',
+    actionItems: [
+      '[현장 검증] 서쪽 1번 출구 자동 차수판(Floodgate) 긴급 기립 및 계단 진입 전면 통제',
+      '[현장 검증] 수위 1.5m 돌파에 따른 승강장 고압 전력선 차단 및 비상 배터리 조명 전환',
+      '[현장 검증] 동쪽 고지대 4번 출구 개찰구 프리패스(Free-Pass) 전면 개방 완료',
+      '[현장 검증] 교통약자 14명 동쪽 방수 엘리베이터 #3 우선 탑승 및 드론(UAV-01) 서쪽 침수선 집중 조명',
+    ],
+    vulnerableNotice:
+      '경고: 서쪽 1번 출구 계단 및 인접 에스컬레이터는 급류 유입으로 절대 진입 불가합니다! 휠체어 이용자·노약자 14분은 바닥의 황색 점멸 홀로그램 유도선을 따라 동쪽 승강장 끝단의 독립 방수형 엘리베이터 3호기([13, 0, -2])에 즉시 탑승하십시오.',
   },
+  verificationLoop: {
+    primaryModel: 'gemini-4-argon',
+    companionVerifier: 'gemini-2.0-flash-safety-verifier',
+    iterations: 2,
+    confidenceScore: 99.6,
+    checks: [
+      {
+        rule: 'Hydraulic Stairwell Inflow & Sweeping Velocity Check',
+        passed: true,
+        detail:
+          '서쪽 1번 계단 유속 2.7m/s 감지(성인 전도 위험) -> 경로 배제 및 동쪽 4번 고지대 계단 우회 확정',
+      },
+      {
+        rule: 'ADA / Wheelchair Accessible Gradient & IP68 Lift Check',
+        passed: true,
+        detail:
+          '교통약자 경로 전 구간 경사도 1/20 이하 및 동쪽 방수 엘리베이터 #3 독립 비상전원 가동 확인',
+      },
+      {
+        rule: '120-Person Crowd Flow & Bottleneck Capacity Verification',
+        passed: true,
+        detail:
+          '일반 승객 106명 + 교통약자 14명 분리 유도로 골든타임(5분 40초) 내 전원 대피 가능 검증',
+      },
+    ],
+  },
+  goldenTimeSeconds: 340,
+  totalEvacuees: 120,
+  vulnerableEvacuees: 14,
+  voiceBroadcast:
+    '긴급 대피 방송입니다. 현재 서쪽 1번 출구 계단으로 폭우가 유입되어 위험합니다. 일반 승객께서는 녹색 네온 유도선을 따라 동쪽 4번 출구 계단으로 대피해 주시고, 휠체어 이용자 및 노약자께서는 황색 유도선을 따라 동쪽 방수 엘리베이터 3호기로 이동해 주시기 바랍니다.',
 };
 
-function getTimeStr(): string {
-  const now = new Date();
-  return now.toTimeString().split(" ")[0];
+function formatNow(): string {
+  const d = new Date();
+  return d.toTimeString().split(' ')[0];
 }
 
 export default function SafeCityPage() {
-  const [simulation, setSimulation] = useState<SimulationData>(INITIAL_SIMULATION);
+  const [simulationData, setSimulationData] = useState<SimulationData>(INITIAL_SIMULATION_DATA);
   const [isLoading, setIsLoading] = useState(false);
-  const [scenarioTrigger, setScenarioTrigger] = useState(0);
-  const [logs, setLogs] = useState<SystemLogEntry[]>([
+  const [agentLogs, setAgentLogs] = useState<AgentLogEntry[]>([
     {
-      id: "init-1",
-      timestamp: "11:30:01",
-      stage: "SYSTEM",
-      message: "[SYSTEM] SafeCity AI 3D Digital Twin 관제 모니터 (여의도역 B2-B3) 가동",
-      level: "info",
+      id: 'init-1',
+      timestamp: '00:00:01',
+      stage: 'SENSOR_SYNC',
+      message: '여의도역 B2 CAD 도면 PDF, 기상청 AWS 110mm/h 레이더, 수위 센서 24기 동기화 완료',
     },
     {
-      id: "init-2",
-      timestamp: "11:30:02",
-      stage: "ARGON-CORE",
-      message: "[ARGON-CORE] Gemini 4 Argon 멀티모달 재난 추론 루프 온라인",
-      level: "success",
+      id: 'init-2',
+      timestamp: '00:00:02',
+      stage: 'ARGON_CORE',
+      message: 'Gemini 4 Argon: 서쪽 1번 출구 계단 유속 2.7m/s 위험 판정 -> 3D 우회 대피선 생성',
     },
     {
-      id: "init-3",
-      timestamp: "11:30:03",
-      stage: "PATHFIND",
-      message: "[PATHFINDER] 홀로그램 대피선(Green Flow) 및 교통약자 우회선(Yellow Pulse) 활성화",
-      level: "warn",
+      id: 'init-3',
+      timestamp: '00:00:03',
+      stage: 'VERIFIER',
+      message: 'Companion Safety Verifier: 방수 엘리베이터 #3 수밀 상태 및 휠체어 경사도 교차 검증 통과',
     },
     {
-      id: "init-4",
-      timestamp: "11:30:04",
-      stage: "DRONE-OPS",
-      message: "[DRONE-OPS] 기동 드론 #A1 서치라이트(SpotLight) 위험 구역 [-10, 1.5, 6] 조준 완료",
-      level: "critical",
+      id: 'init-4',
+      timestamp: '00:00:04',
+      stage: 'VERIFIED',
+      message: '신뢰도 99.6% 검증 완료 -> 120명(일반 106 / 교통약자 14) 3D 홀로그램 유도 가동',
     },
   ]);
 
-  const appendLog = useCallback(
-    (
-      message: string,
-      level: SystemLogEntry["level"] = "info",
-      stage: SystemLogEntry["stage"] = "ARGON-CORE"
-    ) => {
-      setLogs((prev) => [
-        ...prev.slice(-38),
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          timestamp: getTimeStr(),
-          stage,
-          message,
-          level,
-        },
-      ]);
-    },
-    []
-  );
+  const appendLog = useCallback((stage: AgentLogEntry['stage'], message: string) => {
+    setAgentLogs((prev) => [
+      ...prev.slice(-18),
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: formatNow(),
+        stage,
+        message,
+      },
+    ]);
+  }, []);
 
-  // 관제실 현장감을 높이는 주기적 텔레메트리 백그라운드 로그 스트림
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSimulation((currentSim) => {
-        const telemetryMessages = [
-          `[SYSTEM] 수위 파동 센서 동기화 중... 현재 침수 수위 ${currentSim.waterLevel.toFixed(2)}m`,
-          `[PATHFINDER] 대피 경로 유동 인구 밀도 스캔 완료 -> 병목 없음`,
-          `[DRONE-OPS] 드론 #A1 광학/열화상 스포트라이트 좌표 [${currentSim.droneTarget.join(", ")}] 유지 중`,
-        ];
-        const pick =
-          telemetryMessages[Math.floor(Math.random() * telemetryMessages.length)];
-        appendLog(pick, currentSim.status === "DANGER" ? "warn" : "info", "SYSTEM");
-        return currentSim;
-      });
-    }, 9500);
-
-    return () => clearInterval(interval);
-  }, [appendLog]);
-
-  const handleSimulate = useCallback(
-    async (prompt: string, presetId?: string) => {
+  const handleSimulatePrompt = useCallback(
+    async (prompt: string) => {
       setIsLoading(true);
-      setScenarioTrigger((c) => c + 1);
-
+      appendLog('SENSOR_SYNC', `현장 보고 수신: "${prompt}"`);
       appendLog(
-        `[SYSTEM] ⚡ 긴급 시나리오 체인 리액션 발동: "${prompt}"`,
-        "critical",
-        "SENSE"
+        'ARGON_CORE',
+        'Gemini 4 Argon: 지하 공간 3D 유체역학 시뮬레이션 및 교통약자 분리 대피선 산출 중...'
       );
 
-      if (presetId === "scenario-1") {
-        appendLog(
-          "[SENSE] 폭우 유입량 급증 감지 -> 지하 2층 서측 개찰구 차수벽 경보 발령!",
-          "critical",
-          "SENSE"
-        );
-      } else if (presetId === "scenario-2") {
-        appendLog(
-          "[PATHFINDER] 지하 3층 휠체어 이용자 감지 -> 동측 방수 엘리베이터 #3 최우선 호출!",
-          "warn",
-          "PATHFIND"
-        );
-      } else if (presetId === "scenario-3") {
-        appendLog(
-          "[DRONE-OPS] 대용량 배수 펌프 #1~#4 최대 출력 가동 및 구조 드론 수색 개시!",
-          "success",
-          "DRONE-OPS"
-        );
-      }
-
       try {
-        const response = await fetch("/api/simulate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prompt,
-            currentLevel: simulation.waterLevel,
+            currentLevel: simulationData.waterLevel,
           }),
         });
 
-        const data: SimulationData = await response.json();
-        setSimulation(data);
-        setScenarioTrigger((c) => c + 1);
+        const data = (await res.json()) as SimulationData;
+        setSimulationData(data);
 
-        if (Array.isArray(data.reasoningLogs) && data.reasoningLogs.length > 0) {
-          data.reasoningLogs.forEach((line, idx) => {
-            setTimeout(() => {
-              const normalizedLine = line.replace("[PATHFIND]", "[PATHFINDER]");
-              const level: SystemLogEntry["level"] =
-                normalizedLine.includes("DANGER") || normalizedLine.includes("초과")
-                  ? "critical"
-                  : normalizedLine.includes("PATHFINDER")
-                  ? "success"
-                  : idx === 1
-                  ? "warn"
-                  : "info";
-              appendLog(normalizedLine, level);
-            }, (idx + 1) * 260);
-          });
-        } else {
-          appendLog(
-            `[ARGON-CORE] 시나리오 "${data.scenario}" 3D 공간 동기화 완료 (수위 ${data.waterLevel}m)`,
-            data.status === "DANGER" ? "critical" : "success"
-          );
-        }
-      } catch {
         appendLog(
-          "[SYSTEM] 통신 지연 감지 -> 로컬 안전 시뮬레이션 프로토콜 유지",
-          "warn",
-          "SYSTEM"
+          'VERIFIER',
+          `Companion Verifier: 계단 유속 및 방수 엘리베이터 #3 안전성 교차 검증 (${
+            data.verificationLoop?.confidenceScore ?? 99.5
+          }% PASS)`
         );
+        appendLog(
+          'ROUTE_GEN',
+          `3D 경로 갱신: 일반 대피로(${data.evacuationPath.length}노드) · 교통약자 우회로(${data.vulnerablePath.length}노드)`
+        );
+        appendLog(
+          'VERIFIED',
+          `상태 [${data.status}] · 수위 ${data.waterLevel.toFixed(1)}m · 드론(UAV-01) 목표 [${data.droneTarget.join(', ')}] 출동 완료`
+        );
+      } catch {
+        appendLog('VERIFIED', '비상 오프라인 추론 프로토콜로 안전 대피 경로를 유지합니다.');
       } finally {
         setIsLoading(false);
       }
     },
-    [appendLog, simulation.waterLevel]
+    [appendLog, simulationData.waterLevel]
   );
 
-  const handleWaterLevelOverride = useCallback(
-    (newLevel: number) => {
-      setSimulation((prev) => ({
+  const handleManualWaterChange = useCallback((newLevel: number) => {
+    setSimulationData((prev) => {
+      const nextStatus =
+        newLevel >= 2.0 ? 'DANGER' : newLevel >= 0.5 ? 'WARNING' : 'CLEAR';
+      return {
         ...prev,
         waterLevel: newLevel,
-        status: newLevel >= 2.2 ? "DANGER" : newLevel >= 0.8 ? "WARNING" : "CLEAR",
-      }));
-      appendLog(
-        `[SYSTEM] 수동 수위 제어 오버라이드 -> 침수 수위 ${newLevel.toFixed(1)}m 적용`,
-        newLevel >= 2.2 ? "critical" : "info",
-        "SYSTEM"
-      );
-    },
-    [appendLog]
-  );
+        status: nextStatus,
+      };
+    });
+  }, []);
 
   return (
-    <main className="relative w-screen h-screen bg-[#02050b] text-slate-100 flex flex-col overflow-hidden">
-      {/* 가상 상황실 CCTV / 디지털 트윈 모니터 외곽 음영(Vignette) 및 디지털 스캔라인 노이즈 필터 */}
-      <div className="pointer-events-none fixed inset-0 z-30 cctv-vignette" />
-      <div className="pointer-events-none fixed inset-0 z-30 cctv-scanlines opacity-35" />
+    <main className="relative w-screen h-screen overflow-hidden bg-[#020617]">
+      {/* Fullscreen 3D WebGL Digital Twin Canvas */}
+      <ThreeViewer simulationData={simulationData} />
 
-      {/* 상단 프레임리스 관제탑 헤더 */}
-      <header className="h-13 px-5 py-2.5 bg-slate-950/90 backdrop-blur-2xl border-b border-cyan-500/30 shadow-[0_4px_30px_rgba(0,0,0,0.8)] flex items-center justify-between shrink-0 z-20">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-400/60 flex items-center justify-center shadow-[0_0_15px_rgba(6,182,212,0.45)]">
-            <Shield className="w-4 h-4 text-cyan-400" />
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-xs sm:text-sm md:text-base font-extrabold tracking-tight text-slate-100 flex items-center gap-2">
-              <span>SafeCity AI: Autonomous Disaster Response Simulator</span>
-              <span className="hidden md:inline text-cyan-400 font-mono font-normal text-xs">
-                | Powered by Gemini 4 Argon
-              </span>
-            </h1>
-            <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">
-              GOOGLE AI FOR SOCIAL GOOD // CENTRAL METROPOLITAN FLOOD COMMAND
-            </span>
-          </div>
-        </div>
+      {/* Cybernetic Red Pulsing Vignette Overlay on Critical Flood Danger */}
+      {simulationData.status === 'DANGER' && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[5] animate-pulse"
+          style={{
+            boxShadow: 'inset 0 0 110px rgba(239, 68, 68, 0.35)',
+          }}
+        />
+      )}
 
-        <div className="hidden sm:flex items-center gap-2.5 text-xs font-mono">
-          <div className="px-2.5 py-1 rounded bg-slate-900/90 border border-purple-500/40 text-purple-200 flex items-center gap-1.5 shadow-[0_0_12px_rgba(168,85,247,0.2)]">
-            <Cpu className="w-3.5 h-3.5 text-purple-400" />
-            <span>ENGINE: {simulation.modelUsed || "gemini-4-argon"}</span>
-          </div>
-          <div className="px-2.5 py-1 rounded bg-slate-900/90 border border-cyan-500/40 text-cyan-300 flex items-center gap-1.5">
-            <Eye className="w-3.5 h-3.5 text-cyan-400" />
-            <span>CCTV-TWIN #04</span>
-          </div>
-          <div className="px-2.5 py-1 rounded bg-rose-950/60 border border-rose-500/50 text-rose-300 flex items-center gap-1.5 shadow-[0_0_12px_rgba(244,63,94,0.3)]">
-            <Radio className="w-3.5 h-3.5 animate-pulse text-rose-400" />
-            <span>LIVE TELEMETRY</span>
-          </div>
-        </div>
-      </header>
-
-      {/* 메인 관제 레이아웃 (좌측 70%: 시네마틱 3D 캔버스 / 우측 30%: 인터랙티브 보이스 + 재난 상황판) */}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden relative z-10">
-        {/* 좌측 70%: 3D 시뮬레이션 캔버스 */}
-        <section className="w-full lg:w-[70%] h-[50vh] lg:h-full relative border-b lg:border-b-0 lg:border-r border-cyan-500/25">
-          <ThreeViewer simulation={simulation} scenarioTrigger={scenarioTrigger} />
-        </section>
-
-        {/* 우측 30%: VoiceController + DashboardPanel 수직 분할 배치 */}
-        <aside className="w-full lg:w-[30%] h-[50vh] lg:h-full p-3 bg-[#030711]/95 flex flex-col gap-2.5 overflow-hidden">
-          <VoiceController onSimulate={handleSimulate} isLoading={isLoading} />
-          <DashboardPanel
-            simulation={simulation}
-            logs={logs}
-            isLoading={isLoading}
-            onWaterLevelOverride={handleWaterLevelOverride}
-          />
-        </aside>
-      </div>
+      {/* Floating Glassmorphism Mission Control HUD */}
+      <DashboardPanel
+        simulationData={simulationData}
+        isLoading={isLoading}
+        agentLogs={agentLogs}
+        onSubmitPrompt={handleSimulatePrompt}
+        onManualWaterChange={handleManualWaterChange}
+      />
     </main>
   );
 }

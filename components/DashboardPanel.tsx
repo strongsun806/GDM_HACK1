@@ -1,464 +1,588 @@
-"use client";
+'use client';
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  AlertOctagon,
-  Droplets,
-  Cpu,
-  Clock,
+  AlertTriangle,
+  ShieldCheck,
   ShieldAlert,
+  Droplets,
+  Send,
+  Mic,
+  MicOff,
   Terminal,
-  Activity,
-  Navigation,
-  Siren,
-  CheckSquare,
-  Square,
-  MapPin,
+  Accessibility,
   FileText,
   CloudRain,
+  MapPin,
+  Cpu,
+  Radio,
+  CheckCircle2,
+  Sparkles,
+  Volume2,
+  VolumeX,
   Users,
-} from "lucide-react";
-import { SimulationData, SystemLogEntry } from "@/types/simulation";
+  Timer,
+  CheckSquare,
+  Square,
+  GitCompare,
+} from 'lucide-react';
+import { SimulationData, AgentLogEntry } from '@/types/simulation';
 
 interface DashboardPanelProps {
-  simulation: SimulationData;
-  logs: SystemLogEntry[];
+  simulationData: SimulationData;
   isLoading: boolean;
-  onWaterLevelOverride: (level: number) => void;
+  agentLogs: AgentLogEntry[];
+  onSubmitPrompt: (prompt: string) => void;
+  onManualWaterChange: (level: number) => void;
 }
 
-/**
- * 실시간 수위 변동을 시각화하는 미세 진동 물결 파형 그래프 (Canvas Sparkline & Hydro Waveform)
- */
-function WaterLevelSparkline({ waterLevel }: { waterLevel: number }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let animId: number;
-    let offset = 0;
-
-    const draw = () => {
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
-
-      ctx.strokeStyle = "rgba(30, 41, 59, 0.7)";
-      ctx.lineWidth = 1;
-      for (let y = 10; y < h; y += 12) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
-      }
-
-      const normLevel = Math.min(1, Math.max(0.05, waterLevel / 5.0));
-      const baseY = h - normLevel * (h - 10) - 4;
-      const amp = 2.2 + normLevel * 4.5;
-      offset += 0.12 + normLevel * 0.14;
-
-      const grad = ctx.createLinearGradient(0, baseY - amp, 0, h);
-      if (waterLevel >= 2.2) {
-        grad.addColorStop(0, "rgba(244, 63, 94, 0.55)");
-        grad.addColorStop(1, "rgba(14, 165, 233, 0.08)");
-      } else {
-        grad.addColorStop(0, "rgba(56, 189, 248, 0.5)");
-        grad.addColorStop(1, "rgba(14, 165, 233, 0.05)");
-      }
-
-      ctx.beginPath();
-      ctx.moveTo(0, h);
-      for (let x = 0; x <= w; x += 3) {
-        const wave =
-          Math.sin(x * 0.06 + offset) * amp +
-          Math.cos(x * 0.13 - offset * 1.4) * (amp * 0.45);
-        const y = Math.max(2, Math.min(h - 2, baseY + wave));
-        ctx.lineTo(x, y);
-      }
-      ctx.lineTo(w, h);
-      ctx.closePath();
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      ctx.beginPath();
-      for (let x = 0; x <= w; x += 3) {
-        const wave =
-          Math.sin(x * 0.06 + offset) * amp +
-          Math.cos(x * 0.13 - offset * 1.4) * (amp * 0.45);
-        const y = Math.max(2, Math.min(h - 2, baseY + wave));
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = waterLevel >= 2.2 ? "#fb7185" : "#38bdf8";
-      ctx.lineWidth = 2;
-      ctx.shadowColor = waterLevel >= 2.2 ? "#f43f5e" : "#00d2ff";
-      ctx.shadowBlur = 8;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      animId = requestAnimationFrame(draw);
-    };
-
-    animId = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(animId);
-  }, [waterLevel]);
-
-  return (
-    <div className="relative w-full h-11 rounded-lg bg-slate-950/95 border border-slate-800/90 overflow-hidden">
-      <canvas ref={canvasRef} width={320} height={44} className="w-full h-full block" />
-      <div className="absolute top-1 left-2 text-[9px] font-mono text-slate-400 pointer-events-none flex items-center gap-1.5">
-        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-        <span>HYDRO-SONAR WAVEFORM // LIVE TELEMETRY</span>
-      </div>
-      <div className="absolute top-1 right-2 text-[9px] font-mono text-cyan-300 pointer-events-none">
-        +{(waterLevel * 0.12).toFixed(2)}m/min
-      </div>
-    </div>
-  );
-}
-
-/**
- * 개별 로그 라인에 실제 타이핑 효과(Typewriter effect)를 부여하는 컴포넌트
- */
-function TypewriterLogLine({
-  log,
-  isRecent,
-}: {
-  log: SystemLogEntry;
-  isRecent: boolean;
-}) {
-  const [displayed, setDisplayed] = useState(isRecent ? "" : log.message);
-
-  useEffect(() => {
-    if (!isRecent) {
-      setDisplayed(log.message);
-      return;
-    }
-
-    let idx = 0;
-    setDisplayed("");
-    const timer = setInterval(() => {
-      idx += 2;
-      if (idx >= log.message.length) {
-        setDisplayed(log.message);
-        clearInterval(timer);
-      } else {
-        setDisplayed(log.message.slice(0, idx));
-      }
-    }, 16);
-
-    return () => clearInterval(timer);
-  }, [log.message, isRecent]);
-
-  const colorClass =
-    log.level === "critical"
-      ? "text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.4)]"
-      : log.level === "warn"
-      ? "text-amber-300"
-      : log.level === "success"
-      ? "text-emerald-400"
-      : "text-cyan-300";
-
-  return (
-    <div className="leading-snug break-words font-mono text-[11px]">
-      <span className="text-slate-500 mr-1.5">[{log.timestamp}]</span>
-      <span className={`font-semibold ${colorClass}`}>
-        {displayed}
-        {displayed.length < log.message.length && (
-          <span className="inline-block w-1.5 h-3 ml-0.5 bg-cyan-400 animate-pulse align-middle" />
-        )}
-      </span>
-    </div>
-  );
-}
+const QUICK_SCENARIOS = [
+  {
+    label: '🌊 1번 출구 폭우 유입 (코드 레드)',
+    prompt:
+      '여의도역 1번 출구 계단으로 시간당 110mm 폭우가 폭포수처럼 쏟아져 들어오고 휠체어 승객이 승강장에 고립됨',
+  },
+  {
+    label: '🔥 환승통로 침수 합선 · 연기 감지',
+    prompt: '서쪽 환승 통로 변전실 침수로 인한 배전반 스파크 화재 및 유독 연기 확산 발생',
+  },
+  {
+    label: '✅ 배수 펌프 가동 · 상황 해제',
+    prompt: '배수 펌프 100% 가동 완료 및 역사 내 전 구역 침수 상황 해제 복구',
+  },
+];
 
 export default function DashboardPanel({
-  simulation,
-  logs,
+  simulationData,
   isLoading,
-  onWaterLevelOverride,
+  agentLogs,
+  onSubmitPrompt,
+  onManualWaterChange,
 }: DashboardPanelProps) {
-  const logContainerRef = useRef<HTMLDivElement | null>(null);
-  const [checklist, setChecklist] = useState([
-    { id: "chk-1", text: "서측 개찰구 차수문 2단계 긴급 폐쇄", checked: true },
-    { id: "chk-2", text: "동측 방수 엘리베이터 #3 교통약자 우선 호출", checked: true },
-    { id: "chk-3", text: "드론 #A1 수면 서치라이트 및 구명튜브 투하 대기", checked: false },
-  ]);
+  const [promptInput, setPromptInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<Record<number, boolean>>({ 0: true });
+  const [goldenTimeRemaining, setGoldenTimeRemaining] = useState<number>(
+    simulationData.goldenTimeSeconds ?? 340
+  );
+  const [evacuatedCount, setEvacuatedCount] = useState<number>(84);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [agentLogs]);
 
-  const toggleCheck = (id: string) => {
-    setChecklist((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item))
-    );
+  // Reset golden time & checklist state when scenario changes
+  useEffect(() => {
+    setGoldenTimeRemaining(simulationData.goldenTimeSeconds ?? 340);
+    setCheckedItems({ 0: true });
+    setEvacuatedCount(simulationData.status === 'CLEAR' ? 120 : 88);
+  }, [simulationData.scenario, simulationData.goldenTimeSeconds, simulationData.status]);
+
+  // Live Golden Time & Evacuee Counter Ticker
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setGoldenTimeRemaining((prev) => (prev > 0 ? prev - 1 : 0));
+      setEvacuatedCount((prev) => {
+        const total = simulationData.totalEvacuees ?? 120;
+        if (prev < total) return prev + 1;
+        return total;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [simulationData.totalEvacuees]);
+
+  // Cleanup speech synthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!promptInput.trim() || isLoading) return;
+    onSubmitPrompt(promptInput.trim());
+    setPromptInput('');
   };
 
-  const statusMap = {
+  const handleVoiceInput = () => {
+    if (typeof window === 'undefined') return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      const simulatedVoice =
+        '긴급 상황! 서쪽 1번 출구 계단으로 폭우가 폭포수처럼 유입되어 수위가 급상승 중입니다. 휠체어 이용 승객 우회 경로를 즉시 산출하세요.';
+      setPromptInput(simulatedVoice);
+      onSubmitPrompt(simulatedVoice);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'ko-KR';
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => setIsListening(true);
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => setIsListening(false);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          setPromptInput(transcript);
+          onSubmitPrompt(transcript);
+        }
+      };
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  };
+
+  const handleVoiceBroadcast = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      return;
+    }
+
+    const script =
+      simulationData.voiceBroadcast ||
+      `${simulationData.scenario}. ${simulationData.aiReport.vulnerableNotice}`;
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(script);
+    utterance.lang = 'ko-KR';
+    utterance.rate = 1.02;
+    utterance.pitch = 1.0;
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const toggleChecklist = (idx: number) => {
+    setCheckedItems((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const totalEvacuees = simulationData.totalEvacuees ?? 120;
+  const vulnerableEvacuees = simulationData.vulnerableEvacuees ?? 14;
+  const completedChecks = simulationData.aiReport.actionItems.filter(
+    (_, idx) => checkedItems[idx]
+  ).length;
+
+  const statusBadge = {
     DANGER: {
-      badge: "STATUS: CRITICAL",
-      alertText: "ALERT // FLOOD BREACH",
-      color:
-        "bg-rose-500/20 text-rose-200 border-rose-500/80 shadow-[0_0_18px_rgba(244,63,94,0.5)]",
-      panelBorder:
-        "border-rose-500/45 shadow-[0_0_25px_rgba(244,63,94,0.14)]",
+      bg: 'bg-red-500/20 border-red-500/70 text-red-300 shadow-[0_0_24px_rgba(239,68,68,0.4)]',
+      dot: 'bg-red-500',
+      label: 'CRITICAL DANGER · CODE RED',
+      icon: ShieldAlert,
     },
     WARNING: {
-      badge: "STATUS: WARNING",
-      alertText: "ALERT // PUMP ACTIVE",
-      color:
-        "bg-amber-500/20 text-amber-200 border-amber-500/80 shadow-[0_0_18px_rgba(245,158,11,0.4)]",
-      panelBorder:
-        "border-amber-500/40 shadow-[0_0_25px_rgba(245,158,11,0.12)]",
+      bg: 'bg-amber-500/20 border-amber-500/70 text-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.3)]',
+      dot: 'bg-amber-400',
+      label: 'WARNING · ELEVATED RISK',
+      icon: AlertTriangle,
     },
     CLEAR: {
-      badge: "STATUS: SAFE",
-      alertText: "SYSTEM // NOMINAL",
-      color:
-        "bg-emerald-500/20 text-emerald-200 border-emerald-500/80 shadow-[0_0_18px_rgba(16,185,129,0.4)]",
-      panelBorder:
-        "border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.12)]",
+      bg: 'bg-emerald-500/20 border-emerald-500/70 text-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.3)]',
+      dot: 'bg-emerald-400',
+      label: 'ALL CLEAR · NORMAL OPS',
+      icon: ShieldCheck,
     },
-  };
+  }[simulationData.status];
 
-  const currentStatus = statusMap[simulation.status] || statusMap.DANGER;
-  const waterPercentage = Math.min(100, Math.max(0, (simulation.waterLevel / 5.0) * 100));
+  const StatusIcon = statusBadge.icon;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col gap-2.5 overflow-y-auto pr-0.5">
-      {/* 1. 상단 재난 경보 배지 (사이렌 비콘 & 점멸 Alert) + 실시간 수위 파형 그래프 */}
-      <div
-        className={`rounded-xl bg-slate-950/80 backdrop-blur-2xl border p-3.5 flex flex-col gap-2.5 transition-all duration-300 ${currentStatus.panelBorder}`}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <div className="relative flex items-center justify-center w-6 h-6 rounded-md bg-rose-950/90 border border-rose-500/60">
-              <Siren className="w-3.5 h-3.5 text-rose-400 animate-siren" />
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+    <div className="pointer-events-none fixed inset-0 z-10 flex flex-col justify-between p-3 md:p-5 overflow-hidden">
+      {/* TOP BAR: Cybernetic Mission Control Header + Golden Time & Evacuee Telemetry */}
+      <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-cyan-500/30 shadow-[0_0_35px_rgba(0,0,0,0.8)]">
+        <div className="flex items-center gap-3">
+          <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-cyan-300">
+            <Radio className="w-5 h-5 animate-pulse" />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-base md:text-lg font-extrabold tracking-wider text-white font-mono">
+                SAFECITY <span className="text-cyan-400">AI</span>
+              </h1>
+              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono font-semibold uppercase rounded bg-cyan-950/90 text-cyan-300 border border-cyan-500/40">
+                <Sparkles className="w-3 h-3 text-cyan-400" />
+                Gemini 4 Argon × Verifier Loop
+              </span>
             </div>
-            <div className="flex flex-col">
-              <span className="text-[11px] font-bold tracking-wider uppercase text-slate-100">
-                Disaster Telemetry
-              </span>
-              <span className="text-[9px] font-mono font-bold text-rose-400 tracking-widest animate-pulse">
-                {currentStatus.alertText}
-              </span>
+            <p className="text-[11px] text-slate-400 font-mono">
+              여의도역 B2 실시간 3D 재난 대피 디지털 트윈 · Google AI for Social Good
+            </p>
+          </div>
+        </div>
+
+        {/* Center Live Telemetry: Golden Time & 120 Evacuees Counter */}
+        <div className="hidden xl:flex items-center gap-4 px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
+          <div className="flex items-center gap-2">
+            <Timer
+              className={`w-4 h-4 ${
+                simulationData.status === 'DANGER'
+                  ? 'text-red-400 animate-pulse'
+                  : 'text-cyan-400'
+              }`}
+            />
+            <div>
+              <div className="text-[9px] font-mono uppercase text-slate-400">GOLDEN TIME</div>
+              <div
+                className={`text-sm font-mono font-bold ${
+                  simulationData.status === 'DANGER' ? 'text-red-300' : 'text-cyan-300'
+                }`}
+              >
+                {formatTime(goldenTimeRemaining)}
+              </div>
             </div>
           </div>
+
+          <div className="h-6 w-px bg-slate-800" />
+
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-emerald-400" />
+            <div>
+              <div className="text-[9px] font-mono uppercase text-slate-400">
+                EVACUATION PROGRESS
+              </div>
+              <div className="text-xs font-mono font-bold text-emerald-300">
+                {evacuatedCount} / {totalEvacuees}명 대피 완료{' '}
+                <span className="text-yellow-300">(교통약자 {vulnerableEvacuees}명)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Korean AI Emergency PA Voice Broadcast + Status Badge */}
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleVoiceBroadcast}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono font-semibold transition-all ${
+              isSpeaking
+                ? 'bg-amber-500/25 border-amber-400 text-amber-200 shadow-[0_0_16px_rgba(251,191,36,0.5)] animate-pulse'
+                : 'bg-slate-900/90 border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/20'
+            }`}
+            title="역사 내 한국어 AI 비상 안내 방송 음성 송출 (Web Speech TTS)"
+          >
+            {isSpeaking ? (
+              <>
+                <VolumeX className="w-4 h-4 text-amber-300" />
+                방송 중지
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-4 h-4 text-cyan-400" />
+                AI 안내방송 송출
+              </>
+            )}
+          </button>
 
           <div
-            className={`px-2.5 py-1 rounded-full border text-[10px] font-mono font-extrabold flex items-center gap-1.5 ${currentStatus.color}`}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border font-mono text-xs font-bold tracking-wider ${statusBadge.bg}`}
           >
-            <AlertOctagon className="w-3 h-3 text-rose-400 animate-spin" />
-            <span>{currentStatus.badge}</span>
+            <span className="relative flex h-2.5 w-2.5">
+              <span
+                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${statusBadge.dot}`}
+              />
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${statusBadge.dot}`} />
+            </span>
+            <StatusIcon className="w-4 h-4" />
+            <span>{statusBadge.label}</span>
           </div>
         </div>
+      </header>
 
-        {/* 현재 시나리오 브리핑 바 */}
-        <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-cyan-500/30 text-[11px] font-semibold text-cyan-200 shadow-inner">
-          {simulation.scenario}
-        </div>
-
-        {/* 골든타임 6분 내 120명 전원 안전 대피 핵심 지표 배너 */}
-        <div className="px-2.5 py-1.5 rounded-lg bg-emerald-950/40 border border-emerald-500/45 flex items-center justify-between text-[11px] font-mono">
-          <span className="flex items-center gap-1.5 text-emerald-300 font-bold">
-            <Users className="w-3.5 h-3.5 text-emerald-400" />
-            <span>골든타임 6분 내 120명 전원 안전 대피</span>
-          </span>
-          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-200 text-[10px] font-extrabold border border-emerald-400/40">
-            98.4% SIMULATED
-          </span>
-        </div>
-
-        {/* 수위 실시간 수치 게이지 & 물결 파형 그래프(Sparkline) */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="flex items-center gap-1.5 text-slate-300">
-              <Droplets className="w-3.5 h-3.5 text-sky-400 animate-bounce" />
-              <span>Water Level:</span>
-            </span>
-            <span className="font-bold text-sky-300">
-              {simulation.waterLevel.toFixed(1)} m{" "}
-              <span className="text-slate-500 font-normal">/ Max 5.0m</span>
-            </span>
+      {/* MIDDLE AREA: Left Multimodal Grounding + Right Argon Intelligence & Verifier Panel */}
+      <div className="flex-1 flex flex-col lg:flex-row justify-between items-stretch gap-4 my-3 overflow-hidden">
+        {/* LEFT COLUMN: Grounding Sources + Water Level Control + Quick Scenarios */}
+        <div className="pointer-events-auto w-full lg:w-80 flex flex-col gap-2.5 self-start max-h-full overflow-y-auto pr-1">
+          {/* Active Grounding Data Sources Card */}
+          <div className="p-3 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-800/90 shadow-xl">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400 flex items-center gap-1.5 font-semibold">
+                <Cpu className="w-3.5 h-3.5" />
+                Multimodal Grounding Feeds
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/70 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                4 SYNCED
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5 text-[11px] font-mono">
+              <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-200">
+                <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span className="truncate">Yeouido_B2_CAD.pdf</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-200">
+                <CloudRain className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="truncate">KMA_110mm_HR.live</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-200">
+                <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate">GoogleMaps_Elev.json</span>
+              </div>
+              <div className="flex items-center gap-1.5 p-1.5 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-200">
+                <Droplets className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <span className="truncate">IoT_FloodGate_01.bin</span>
+              </div>
+            </div>
           </div>
 
-          <WaterLevelSparkline waterLevel={simulation.waterLevel} />
+          {/* Real-Time Flood Water Level Controller */}
+          <div className="p-3 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-800/90 shadow-xl">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-mono text-slate-300 flex items-center gap-1.5 font-semibold">
+                <Droplets className="w-4 h-4 text-sky-400" />
+                실시간 침수 수위 (Water Level)
+              </span>
+              <span
+                className={`text-sm font-mono font-extrabold px-2 py-0.5 rounded ${
+                  simulationData.waterLevel >= 2.0
+                    ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                    : simulationData.waterLevel > 0.5
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                }`}
+              >
+                {simulationData.waterLevel.toFixed(1)}m / 5.0m
+              </span>
+            </div>
 
-          <div className="w-full h-2.5 rounded-full bg-slate-950 border border-slate-700/80 overflow-hidden p-0.5">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                simulation.waterLevel >= 2.2
-                  ? "bg-gradient-to-r from-sky-500 via-amber-500 to-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.8)]"
-                  : simulation.waterLevel >= 1.0
-                  ? "bg-gradient-to-r from-sky-500 to-amber-400"
-                  : "bg-gradient-to-r from-cyan-500 to-sky-400"
-              }`}
-              style={{ width: `${waterPercentage}%` }}
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-2 pt-0.5">
-            <span className="text-[10px] font-mono text-slate-400">
-              MANUAL SURGE SIMULATOR
-            </span>
             <input
               type="range"
               min={0}
               max={5}
               step={0.1}
-              value={simulation.waterLevel}
-              onChange={(e) => onWaterLevelOverride(parseFloat(e.target.value))}
-              className="w-36 accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+              value={simulationData.waterLevel}
+              onChange={(e) => onManualWaterChange(parseFloat(e.target.value))}
+              className="w-full accent-cyan-400 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
             />
-          </div>
-        </div>
-      </div>
-
-      {/* 2. GEMINI 4 ARGON DIAGNOSTIC REPORT (Track 3 Grounding + 스캔라인 + 현장 검증 체크리스트) */}
-      <div className="relative overflow-hidden rounded-xl bg-slate-950/80 backdrop-blur-2xl border border-purple-500/40 shadow-[0_0_25px_rgba(168,85,247,0.14)] p-3.5 flex flex-col gap-2.5">
-        <div className="pointer-events-none absolute inset-x-0 h-10 bg-gradient-to-b from-transparent via-cyan-400/10 to-transparent animate-scanline" />
-
-        <div className="flex items-center justify-between gap-2 relative z-10">
-          <div className="flex items-center gap-2">
-            <Cpu className="w-4 h-4 text-purple-400 animate-pulse" />
-            <h3 className="text-xs font-bold tracking-wider uppercase text-slate-100">
-              GEMINI 4 ARGON DIAGNOSTIC REPORT
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900/90 border border-purple-500/40">
-            <div className="flex items-end gap-0.5 h-3">
-              <span className="w-0.5 h-1.5 bg-cyan-400 animate-pulse" />
-              <span className="w-0.5 h-3 bg-purple-400 animate-bounce" />
-              <span className="w-0.5 h-2 bg-cyan-300 animate-pulse" />
-              <span className="w-0.5 h-2.5 bg-rose-400 animate-bounce" />
+            <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+              <span>0.0m (정상)</span>
+              <span>1.5m (차수판 가동)</span>
+              <span>5.0m (한계침수)</span>
             </div>
-            <span className="text-[9px] font-mono text-purple-200 font-bold">
-              {isLoading ? "SCANNING" : "1M CTX SYNC"}
+          </div>
+
+          {/* Tactical Scenario Presets */}
+          <div className="p-3 rounded-2xl bg-slate-950/85 backdrop-blur-xl border border-slate-800/90 shadow-xl">
+            <span className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1.5">
+              즉시 시뮬레이션 시나리오 (One-Click Test)
             </span>
+            <div className="flex flex-col gap-1.5">
+              {QUICK_SCENARIOS.map((item, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  disabled={isLoading}
+                  onClick={() => onSubmitPrompt(item.prompt)}
+                  className="text-left text-xs px-3 py-2 rounded-xl bg-slate-900/90 hover:bg-cyan-950/70 text-slate-200 hover:text-cyan-200 border border-slate-800 hover:border-cyan-500/40 transition-all disabled:opacity-50"
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Track 3 Grounding 데이터 소스 배지 (재해지도 + 기상피드 + Google Maps + 도면 PDF) */}
-        <div className="grid grid-cols-3 gap-1 text-[9px] font-mono relative z-10">
-          <div className="px-1.5 py-1 rounded bg-slate-900/90 border border-slate-700/80 text-sky-300 flex items-center gap-1 truncate">
-            <CloudRain className="w-3 h-3 text-sky-400 shrink-0" />
-            <span className="truncate">기상청 110mm/h</span>
-          </div>
-          <div className="px-1.5 py-1 rounded bg-slate-900/90 border border-slate-700/80 text-emerald-300 flex items-center gap-1 truncate">
-            <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
-            <span className="truncate">Maps Grounded</span>
-          </div>
-          <div className="px-1.5 py-1 rounded bg-slate-900/90 border border-slate-700/80 text-amber-300 flex items-center gap-1 truncate">
-            <FileText className="w-3 h-3 text-amber-400 shrink-0" />
-            <span className="truncate">여의도역 도면 PDF</span>
-          </div>
-        </div>
+        {/* RIGHT COLUMN: Argon Briefing + Companion Safety Verifier Loop + Checklists + Terminal */}
+        <div className="pointer-events-auto w-full lg:w-[430px] flex flex-col gap-2.5 max-h-full overflow-y-auto pl-1">
+          {/* Scenario & AI Tactical Analysis Card */}
+          <div className="p-3.5 rounded-2xl bg-slate-950/88 backdrop-blur-xl border border-cyan-500/30 shadow-2xl">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400 font-semibold">
+                GEMINI 4 ARGON TACTICAL REPORT
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">
+                HAZARD: [{simulationData.dangerZone.join(', ')}]
+              </span>
+            </div>
 
-        <div className="grid grid-cols-1 gap-2 text-xs relative z-10">
-          <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 flex flex-col gap-1">
-            <span className="text-[10px] font-mono uppercase text-cyan-400 flex items-center gap-1">
-              <Activity className="w-3 h-3" /> 피해 예측 및 구조물 진단
-            </span>
-            <p className="text-slate-200 leading-relaxed text-[11px]">
-              {simulation.aiReport.summary}
+            <h2 className="text-sm md:text-base font-bold text-white mb-1.5">
+              {simulationData.scenario}
+            </h2>
+
+            <p className="text-xs leading-relaxed text-slate-300 bg-slate-900/80 p-2.5 rounded-xl border border-slate-800/90 mb-2.5">
+              {simulationData.aiReport.summary}
             </p>
-          </div>
 
-          <div className="p-2.5 rounded-lg bg-rose-950/35 border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.15)] flex flex-col gap-1">
-            <span className="text-[10px] font-mono uppercase text-rose-300 flex items-center gap-1">
-              <Clock className="w-3 h-3 text-rose-400 animate-spin" /> 인명 피해 예측 및 잔여 골든타임
-            </span>
-            <p className="text-rose-200 font-bold text-[11px]">
-              {simulation.aiReport.casualties}
-            </p>
-          </div>
-
-          <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/45 flex flex-col gap-1">
-            <span className="text-[10px] font-mono uppercase text-emerald-300 flex items-center gap-1">
-              <ShieldAlert className="w-3 h-3 text-emerald-400" /> AI 즉각 권고 조치 (Action Required)
-            </span>
-            <p className="text-emerald-100 leading-relaxed text-[11px]">
-              {simulation.aiReport.actionRequired}
-            </p>
-          </div>
-
-          {/* Track 3 검증 가능한 현장 대응 체크리스트 (Verifiable Field Checklist) */}
-          <div className="p-2.5 rounded-lg bg-slate-900/90 border border-cyan-500/30 flex flex-col gap-1.5">
-            <span className="text-[10px] font-mono uppercase text-cyan-300 font-bold">
-              ✓ VERIFIABLE FIELD CHECKLIST (현장 대원 검증 루프)
-            </span>
-            {checklist.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => toggleCheck(item.id)}
-                className="flex items-center gap-2 text-left text-[11px] text-slate-200 hover:text-cyan-300 transition-colors"
-              >
-                {item.checked ? (
-                  <CheckSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                ) : (
-                  <Square className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                )}
-                <span className={item.checked ? "line-through text-slate-400" : ""}>
-                  {item.text}
+            {/* Vulnerable & Wheelchair Accessible Priority Alert */}
+            <div className="p-2.5 rounded-xl bg-yellow-500/10 border border-yellow-400/50 mb-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5 text-yellow-300 text-xs font-bold">
+                  <Accessibility className="w-4 h-4 shrink-0" />
+                  <span>교통약자 전용 방수 엘리베이터 #3 유도 지침</span>
+                </div>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-yellow-400/20 text-yellow-200 font-semibold">
+                  {vulnerableEvacuees}명 우선 탑승
                 </span>
-              </button>
-            ))}
+              </div>
+              <p className="text-xs text-yellow-100/90 leading-relaxed">
+                {simulationData.aiReport.vulnerableNotice}
+              </p>
+            </div>
+
+            {/* Argon × Companion Model Verification Loop Card (Hackathon Criterion #1 & #3) */}
+            {simulationData.verificationLoop && (
+              <div className="p-2.5 rounded-xl bg-cyan-950/35 border border-cyan-500/40 mb-2.5">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="flex items-center gap-1.5 text-[11px] font-mono font-bold text-cyan-300">
+                    <GitCompare className="w-3.5 h-3.5 text-cyan-400" />
+                    ARGON × COMPANION VERIFICATION LOOP
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    신뢰도 {simulationData.verificationLoop.confidenceScore}% PASS
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {simulationData.verificationLoop.checks.map((chk, i) => (
+                    <div
+                      key={i}
+                      className="text-[11px] bg-slate-900/85 px-2.5 py-1.5 rounded-lg border border-slate-800/90"
+                    >
+                      <div className="flex items-center justify-between font-mono text-emerald-300 font-semibold">
+                        <span>✓ {chk.rule}</span>
+                        <span className="text-[9px] text-cyan-400">VERIFIED</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 mt-0.5">{chk.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Interactive Verifiable Field Checklists (Track 3 Core Requirement) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-emerald-400 flex items-center gap-1.5 font-semibold">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Verifiable Field Checklist (현장 대응 실행 체크)
+                </span>
+                <span className="text-[10px] font-mono text-emerald-300">
+                  {completedChecks}/{simulationData.aiReport.actionItems.length} 완료
+                </span>
+              </div>
+              <ul className="space-y-1.5">
+                {simulationData.aiReport.actionItems.map((item, idx) => {
+                  const isDone = !!checkedItems[idx];
+                  return (
+                    <li
+                      key={idx}
+                      onClick={() => toggleChecklist(idx)}
+                      className={`cursor-pointer flex items-start gap-2 text-xs p-2 rounded-lg border transition-all ${
+                        isDone
+                          ? 'bg-emerald-950/35 border-emerald-500/40 text-emerald-200'
+                          : 'bg-slate-900/75 border-slate-800/90 text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      {isDone ? (
+                        <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                      )}
+                      <span className={isDone ? 'line-through opacity-85' : ''}>{item}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5 pt-0.5 text-[10px] font-mono">
-            <div className="px-2 py-1.5 rounded bg-slate-900/95 border border-rose-500/35 text-rose-200 flex items-center gap-1.5">
-              <Navigation className="w-3 h-3 text-rose-400 shrink-0" />
-              <span className="truncate">
-                HAZARD: [{simulation.dangerZone.join(", ")}]
+          {/* Live AI Agent Verification Loop Terminal */}
+          <div className="p-3 rounded-2xl bg-slate-950/90 backdrop-blur-xl border border-slate-800/90 shadow-xl flex flex-col h-36">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-mono uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                <Terminal className="w-3.5 h-3.5" />
+                Argon Multi-Agent Execution Log
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">
+                {isLoading ? 'COMPUTING...' : 'SYNCED'}
               </span>
             </div>
-            <div className="px-2 py-1.5 rounded bg-slate-900/95 border border-cyan-500/35 text-cyan-200 flex items-center gap-1.5">
-              <Navigation className="w-3 h-3 text-cyan-400 shrink-0" />
-              <span className="truncate">
-                DRONE: [{simulation.droneTarget.join(", ")}]
-              </span>
+            <div
+              ref={logContainerRef}
+              className="flex-1 overflow-y-auto space-y-1 font-mono text-[11px] pr-1"
+            >
+              {agentLogs.map((log) => (
+                <div key={log.id} className="flex items-start gap-1.5 leading-tight">
+                  <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                  <span
+                    className={`shrink-0 font-semibold ${
+                      log.stage === 'VERIFIED'
+                        ? 'text-emerald-400'
+                        : log.stage === 'VERIFIER'
+                        ? 'text-amber-300'
+                        : log.stage === 'ARGON_CORE'
+                        ? 'text-purple-400'
+                        : 'text-cyan-400'
+                    }`}
+                  >
+                    [{log.stage}]
+                  </span>
+                  <span className="text-slate-300">{log.message}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      {/* 3. ARGON REASONING LOOP TERMINAL (실시간 타이핑 효과 & 자동 스크롤) */}
-      <div className="rounded-xl bg-slate-950/85 backdrop-blur-2xl border border-emerald-500/35 shadow-[0_0_25px_rgba(16,185,129,0.1)] p-3.5 flex-1 min-h-[155px] flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-bold tracking-wider uppercase text-slate-100">
-              ARGON REASONING LOOP TERMINAL
-            </h3>
-          </div>
-          <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-            LIVE STREAM
-          </span>
-        </div>
-
-        <div
-          ref={logContainerRef}
-          className="flex-1 rounded-lg bg-[#030711] border border-slate-800/90 p-2.5 overflow-y-auto flex flex-col gap-1.5 shadow-inner"
+      {/* BOTTOM COMMAND CONSOLE: Natural Language + Voice Emergency Input */}
+      <div className="pointer-events-auto w-full max-w-2xl mx-auto">
+        <form
+          onSubmit={handleFormSubmit}
+          className="flex items-center gap-2 p-2 rounded-2xl bg-slate-950/90 backdrop-blur-xl border border-cyan-500/40 shadow-[0_0_30px_rgba(0,0,0,0.85)]"
         >
-          {logs.map((log, index) => (
-            <TypewriterLogLine
-              key={log.id}
-              log={log}
-              isRecent={index >= logs.length - 4}
-            />
-          ))}
-        </div>
+          <button
+            type="button"
+            onClick={handleVoiceInput}
+            title="음성으로 재난 상황 보고 (Web Speech API)"
+            className={`flex items-center justify-center w-10 h-10 rounded-xl border transition-all shrink-0 ${
+              isListening
+                ? 'bg-red-500/25 border-red-400 text-red-300 animate-pulse'
+                : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-cyan-400'
+            }`}
+          >
+            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          </button>
+
+          <input
+            type="text"
+            value={promptInput}
+            onChange={(e) => setPromptInput(e.target.value)}
+            placeholder="재난 상황을 입력하세요 (예: 1번 출구 계단 폭우 유입, 휠체어 승객 우회 경로 탐색)..."
+            className="flex-1 bg-transparent text-xs md:text-sm text-white placeholder-slate-400 focus:outline-none font-mono px-2"
+          />
+
+          <button
+            type="submit"
+            disabled={isLoading || !promptInput.trim()}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-mono font-bold text-xs transition-all disabled:opacity-40 shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.5)]"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>{isLoading ? '검증 중...' : 'AI 관제 실행'}</span>
+          </button>
+        </form>
       </div>
     </div>
   );
