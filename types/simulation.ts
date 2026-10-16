@@ -1,5 +1,7 @@
 export type SimulationStatus = 'DANGER' | 'WARNING' | 'CLEAR';
 
+export type SupportedLang = 'ko' | 'en' | 'ja' | 'zh';
+
 export type Vec3 = [number, number, number];
 
 export interface AIReport {
@@ -17,9 +19,39 @@ export interface VerificationCheck {
 export interface VerificationLoopData {
   primaryModel: string;
   companionVerifier: string;
+  edgeFallbackModel: string;
   iterations: number;
   confidenceScore: number;
+  selfCorrectedNodes: number;
   checks: VerificationCheck[];
+}
+
+export interface ContextTelemetry {
+  usedTokens: number;
+  maxTokens: number;
+  modalities: string[];
+}
+
+export interface MultilingualBroadcast {
+  ko: string;
+  en: string;
+  ja: string;
+  zh: string;
+}
+
+export interface SurfaceShelter {
+  id: string;
+  name: string;
+  type: string;
+  lat: number;
+  lng: number;
+  distanceMeters: number;
+  elevationMeters: number;
+  etaMinutes: number;
+  wheelchairAccessible: boolean;
+  occupancyPercent: number;
+  connectedExit: string;
+  bearing: string;
 }
 
 export interface SimulationData {
@@ -32,15 +64,18 @@ export interface SimulationData {
   droneTarget: Vec3;
   aiReport: AIReport;
   verificationLoop?: VerificationLoopData;
+  contextTelemetry?: ContextTelemetry;
   goldenTimeSeconds?: number;
   totalEvacuees?: number;
   vulnerableEvacuees?: number;
   voiceBroadcast?: string;
+  translations?: MultilingualBroadcast;
+  shelters?: SurfaceShelter[];
 }
 
 export interface AgentLogEntry {
   id: string;
   timestamp: string;
-  stage: 'SENSOR_SYNC' | 'ARGON_CORE' | 'VERIFIER' | 'ROUTE_GEN' | 'VERIFIED';
+  stage: 'SENSOR_SYNC' | 'ARGON_CORE' | 'VERIFIER' | 'ROUTE_GEN' | 'VERIFIED' | 'HITL_GATE';
   message: string;
 }
